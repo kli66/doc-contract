@@ -1,6 +1,7 @@
 schema_version = 1
 repo_name = "doc-contracts"
 roadmap = "docs/roadmap.md"
+edge_fingerprints = "advisory"
 optional_roots = ["capabilities"]
 
 [root_nodes]

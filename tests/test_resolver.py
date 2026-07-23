@@ -5,8 +5,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from doc_contract.config import Settings
-from doc_contract.resolver import Finding, resolve, warning_delta
+from doc_contract.resolver import Finding, fingerprint, resolve, warning_delta
 
 
 def _write(root: Path, relative: str, content: str) -> Path:
@@ -16,11 +18,12 @@ def _write(root: Path, relative: str, content: str) -> Path:
     return path
 
 
-def _settings(root: Path) -> Settings:
+def _settings(root: Path, *, edge_fingerprints: str = "advisory") -> Settings:
     return Settings(
         repo_root=root,
         repo_name="fixture",
         root_nodes={"roadmap": "docs/roadmap.md"},
+        edge_fingerprint_policy=edge_fingerprints,
     )
 
 
@@ -83,7 +86,13 @@ def test_persistence_uses_repository_relative_paths(tmp_path: Path) -> None:
     assert not [finding for finding in result.findings if finding.code == "unstamped-frozen"]
 
 
-def test_empty_and_pending_edge_hashes_are_actionable(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [("", "edge-hash-empty"), ("PENDING", "edge-hash-pending"), ("bad", "edge-hash-invalid")],
+)
+def test_invalid_edge_hashes_warn_in_advisory_and_fail_when_required(
+    value: str, code: str, tmp_path: Path
+) -> None:
     root = tmp_path / "repo"
     _write(root, "docs/roadmap.md", _roadmap("source"))
     _write(
@@ -91,14 +100,85 @@ def test_empty_and_pending_edge_hashes_are_actionable(tmp_path: Path) -> None:
         "docs/changes/target/change.md",
         "---\nid: target\npersistence: ephemeral\nstatus: landed\ntrack: test\n---\n# Target\n",
     )
-    source = _write(root, "docs/changes/source/change.md", _change("source", fingerprint=""))
-    empty = resolve(root, _settings(root))
-    assert "hash-empty" in {finding.code for finding in empty.errors}
+    _write(root, "docs/changes/source/change.md", _change("source", fingerprint=value))
 
-    source.write_text(_change("source", fingerprint="PENDING"), encoding="utf-8")
-    pending = resolve(root, _settings(root))
-    assert "hash-pending" in {finding.code for finding in pending.errors}
-    assert any("doc-contract stamp source" in finding.message for finding in pending.errors)
+    advisory = resolve(root, _settings(root))
+    assert code in {finding.code for finding in advisory.warnings}
+    assert code not in {finding.code for finding in advisory.errors}
+    assert any("doc-contract stamp source" in finding.message for finding in advisory.warnings)
+    assert code in {finding.code for finding in warning_delta([], advisory.warnings).introduced}
+
+    required = resolve(root, _settings(root, edge_fingerprints="required"))
+    assert code in {finding.code for finding in required.errors}
+
+
+def test_missing_edge_hash_is_optional_in_advisory_and_required_on_opt_in(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap("source"))
+    _write(
+        root,
+        "docs/changes/target/change.md",
+        "---\nid: target\npersistence: ephemeral\nstatus: landed\ntrack: test\n---\n# Target\n",
+    )
+    _write(
+        root,
+        "docs/changes/source/change.md",
+        "---\nid: source\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "depends_on:\n  - target\n---\n# Source\n",
+    )
+
+    advisory = resolve(root, _settings(root))
+    assert "missing-fingerprint" not in {finding.code for finding in advisory.findings}
+
+    required = resolve(root, _settings(root, edge_fingerprints="required"))
+    assert "missing-fingerprint" in {finding.code for finding in required.errors}
+
+
+def test_stale_edge_hash_warns_under_both_policies(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap("source"))
+    _write(
+        root,
+        "docs/changes/target/change.md",
+        "---\nid: target\npersistence: ephemeral\nstatus: landed\ntrack: test\n---\n# Target\n",
+    )
+    _write(root, "docs/changes/source/change.md", _change("source", fingerprint="0" * 16))
+
+    for policy in ("advisory", "required"):
+        result = resolve(root, _settings(root, edge_fingerprints=policy))
+        assert "suspect-link" in {finding.code for finding in result.warnings}
+        assert "suspect-link" not in {finding.code for finding in result.errors}
+
+
+def test_fingerprint_canonicalization_boundary() -> None:
+    normalized = "---\nid: first\n---\n\n# Heading\n\nBody\n"
+    formatting_noise = (
+        "---\r\nid: second\r\nextra: value\r\n---\r\n\r\n\r\n"
+        "# Heading  \r\n\r\nBody\t\r\n\r\n"
+    )
+    assert fingerprint(normalized) == fingerprint(formatting_noise)
+
+    reflowed = "---\nid: first\n---\n# Heading\n\nBo\ndy\n"
+    markdown_rewritten = "---\nid: first\n---\n# Heading\n\n**Body**\n"
+    assert fingerprint(normalized) != fingerprint(reflowed)
+    assert fingerprint(normalized) != fingerprint(markdown_rewritten)
+
+
+def test_markdown_syntax_rewrite_trips_frozen_self_hash(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    original = "---\npersistence: frozen\n---\n# Reference\n\n**Important**\n"
+    reference = _write(root, "docs/spec/reference.md", original)
+    stamp = fingerprint(original)
+    reference.write_text(
+        f"---\npersistence: frozen\nself_hash: {stamp}\n---\n# Reference\n\n__Important__\n",
+        encoding="utf-8",
+    )
+
+    result = resolve(root, _settings(root))
+    assert "self-hash-mismatch" in {finding.code for finding in result.errors}
 
 
 def test_pending_frozen_self_hash_is_error(tmp_path: Path) -> None:

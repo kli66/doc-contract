@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import config
 from dag import PERSISTENCE_CLASSES, REPO_ROOT, Finding, fingerprint, resolve
 
@@ -275,13 +277,24 @@ def test_root_doc_missing_persistence_is_error(tmp_path: Path) -> None:
     assert "missing-persistence" in _codes(res.errors, "ERROR")
 
 
-def test_missing_fingerprint_on_active_doc_edge_is_error(tmp_path: Path) -> None:
-    """Fingerprint-by-default: an active change with a doc-target dependency and no fingerprint is
-    an ERROR; stamping the target's content hash clears it."""
+def test_edge_fingerprint_policy_defaults_advisory_and_supports_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The legacy adapter reads the same advisory/required policy seam as the package."""
     adr = _write(tmp_path, "docs/adr/0001-x.md", "---\nstatus: accepted\n---\n# x\n")
     _write(tmp_path, "docs/roadmap.md", _roadmap("a|(proposed)"))
     _write(tmp_path, "docs/changes/a/change.md", _fm("a", depends=["adr-0001"]))
+    assert config.EDGE_FINGERPRINT_POLICY == "advisory"
+    assert "missing-fingerprint" not in _codes(resolve(tmp_path).findings, "ERROR")
+
+    monkeypatch.setattr(config, "EDGE_FINGERPRINT_POLICY", "required")
     assert "missing-fingerprint" in _codes(resolve(tmp_path).errors, "ERROR")
+
+    monkeypatch.setattr(config, "EDGE_FINGERPRINT_POLICY", "strict")
+    with pytest.raises(ValueError, match="edge_fingerprint_policy"):
+        resolve(tmp_path)
+
+    monkeypatch.setattr(config, "EDGE_FINGERPRINT_POLICY", "required")
 
     fp = fingerprint(adr.read_text(encoding="utf-8"))
     _write(

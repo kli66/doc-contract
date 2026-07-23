@@ -36,6 +36,7 @@ Create `.doc-contract.toml` at the repository root:
 schema_version = 1
 repo_name = "example"
 roadmap = "docs/roadmap.md"
+edge_fingerprints = "advisory"
 optional_roots = ["capabilities"]
 
 [root_nodes]
@@ -50,6 +51,13 @@ mode = "skip"
 Every declared root is required by default. `optional_roots` is the explicit exception list; the
 roadmap cannot be optional. Missing required roots are errors, while optional omissions remain
 visible as warnings. Paths must be unique, relative, and remain inside the selected repository.
+
+Dependency topology is always enforced. `edge_fingerprints` controls only review metadata:
+`advisory` (the default when omitted) accepts an absent fingerprint and warns on an explicit empty,
+`PENDING`, malformed, or stale value; `required` makes absent and invalid active-edge values errors.
+Frozen-document `self_hash` validation remains strict under both policies. Hashes ignore front
+matter, line endings, trailing whitespace, and boundary blank lines; prose reflow and Markdown
+syntax rewrites remain significant.
 
 Repository selection precedence is explicit: `--repo-root`, then the parent of `--config`, then the
 current Git root. Missing config, a missing roadmap, a missing required root, and zero discovered
@@ -84,11 +92,12 @@ Discovery includes Git-tracked documents plus declared roots by default. `--incl
 previews provisional node IDs and paths before `update` or `land` mutates anything; without it,
 untracked candidates are reported and excluded. `check` is read-only and labels tolerated baseline
 warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap
-block after validation. `stamp` refreshes reviewed hashes in one node; empty, `PENDING`, and malformed
-hashes are actionable errors. `sync` updates the vendored package and pin manifest. `land` previews
-and then atomically applies the status, dependent fingerprints, roadmap, and archive move; rerunning
-a completed landing returns success without changing files or the Git index. Interrupted landings
-resume from the journal under Git metadata, and concurrent edits fail closed.
+block after validation. `stamp` records or refreshes reviewed edge metadata even in advisory mode
+and refreshes strict frozen `self_hash` values. `sync` updates the vendored package and pin manifest.
+`land` previews and then atomically applies the status, dependent fingerprints, roadmap, and archive
+move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
+returns success without changing files or the Git index. Interrupted landings resume from the
+journal under Git metadata, and concurrent edits fail closed.
 
 Legacy `PYTHONPATH=scripts python -m dag` and flat `secret_scan` imports remain compatibility paths;
 new automation should use the installed command and `.doc-contract.toml`.

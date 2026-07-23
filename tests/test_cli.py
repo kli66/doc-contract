@@ -25,6 +25,7 @@ def _config(
     *,
     roots: dict[str, str] | None = None,
     optional_roots: tuple[str, ...] = (),
+    edge_fingerprints: str | None = None,
     capability_mode: str = "skip",
     capability_command: tuple[str, ...] = (),
 ) -> str:
@@ -35,9 +36,10 @@ def _config(
         "optional_roots = ["
         + ", ".join(json.dumps(item) for item in optional_roots)
         + "]",
-        "",
-        "[root_nodes]",
     ]
+    if edge_fingerprints is not None:
+        lines.append(f'edge_fingerprints = "{edge_fingerprints}"')
+    lines.extend(["", "[root_nodes]"])
     for node_id, path in (roots if roots is not None else {"roadmap": "docs/roadmap.md"}).items():
         lines.append(f'{node_id} = "{path}"')
     lines.extend(["", "[capability]", f'mode = "{capability_mode}"'])
@@ -118,6 +120,26 @@ def test_explicit_optional_root_is_reported_without_failing(
     assert "optional-root-missing" in capsys.readouterr().out
 
 
+def test_edge_fingerprints_default_to_advisory_and_allow_required_opt_in(
+    tmp_path: Path,
+) -> None:
+    default_repo = _repo(tmp_path / "default")
+    required_repo = tmp_path / "required"
+    _write(
+        required_repo,
+        ".doc-contract.toml",
+        _config(edge_fingerprints="required"),
+    )
+    _write(
+        required_repo,
+        "docs/roadmap.md",
+        "---\npersistence: living\n---\n# Roadmap\n",
+    )
+
+    assert load_settings(default_repo).edge_fingerprint_policy == "advisory"
+    assert load_settings(required_repo).edge_fingerprint_policy == "required"
+
+
 @pytest.mark.parametrize(
     "config",
     [
@@ -126,6 +148,9 @@ def test_explicit_optional_root_is_reported_without_failing(
         "[root_nodes]\nroadmap = 'docs/roadmap.md'\n",
         "schema_version = 1\nrepo_name = 'x'\n[root_nodes]\n"
         "one = 'docs/roadmap.md'\ntwo = 'docs/roadmap.md'\n",
+        "schema_version = 1\nrepo_name = 'x'\nedge_fingerprints = 'strict'\n"
+        "[root_nodes]\n",
+        "schema_version = 1\nrepo_name = 'x'\nedge_fingerprints = []\n[root_nodes]\n",
     ],
 )
 def test_ambiguous_root_policy_is_rejected(
@@ -272,6 +297,8 @@ def test_stamp_refreshes_active_dependency_fingerprint(
         "---\npersistence: living\n---\n# Roadmap\n\n"
         "- `docs/changes/source/` (in-progress)\n",
     )
+    assert load_settings(repo).edge_fingerprint_policy == "advisory"
+    assert not resolve(repo, load_settings(repo)).errors
     assert main(["stamp", "source", "--repo-root", str(repo)]) == 0
     assert fingerprint(target.read_text(encoding="utf-8")) in source.read_text(encoding="utf-8")
     assert not resolve(repo, load_settings(repo)).errors

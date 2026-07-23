@@ -15,6 +15,7 @@ Contract (read by the invariant core):
   * ``REPO_ROOT``            — the repo being enforced.
   * ``REPO_NAME``            — cosmetic; used in messages/ids.
   * ``ROOT_NODES``           — managed docs outside changes/adr/spec that must still self-classify.
+  * ``EDGE_FINGERPRINT_POLICY`` — advisory by default; required only by repository opt-in.
   * ``FINGERPRINT_TARGETS``  — which node kinds are fingerprintable (v1: docs only; never `src/`).
   * ``CAPABILITY_DOC``       — the living doc whose headings must mirror a code surface.
   * ``CAPABILITY_ENUMERATORS`` — the per-surface coverage checks (``CapabilityCheck``).
@@ -46,9 +47,13 @@ ROOT_NODES: dict[str, str] = {
 # Root nodes are required by default. List intentionally absent installation-specific roots here.
 OPTIONAL_ROOTS: tuple[str, ...] = ("agents", "capabilities")
 
-# v1 fingerprint targets are docs only: a code formatter is language-specific and prose is not
-# reflowed, so doc fingerprints are stable day-to-day; a `src/` symbol is never a v1 target. Kept as
-# an explicit knob so a future code-aware version flips it per-repo.
+# Dependency topology is mandatory; dependency review fingerprints are advisory unless a repository
+# explicitly opts into the strict green-bar policy.
+EDGE_FINGERPRINT_POLICY = "advisory"
+
+# v1 fingerprint targets are docs only. Canonicalization ignores front matter and whitespace noise,
+# but prose reflow and Markdown syntax rewrites remain significant; a `src/` symbol is never a v1
+# target. Kept as an explicit knob so a future code-aware version flips it per-repo.
 FINGERPRINT_TARGETS: tuple[str, ...] = ("doc",)
 
 # ---- capability coverage (the one doc whose headings are a function of code) ---------------------

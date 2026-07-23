@@ -47,5 +47,13 @@ OpenSpec/OpenLore as tools. Two independent reasons, either sufficient:
 - **Zero-dep is load-bearing** — it is *the* reason this is defensible over OpenSpec. Never add a
   third-party dependency to the resolver (a stdlib YAML-subset parser and f-string Mermaid render are
   in `dag.py` precisely to hold this line). The day it needs PyYAML/Jinja2, re-open reason (1).
+- **Dependency topology is mandatory; review fingerprints are advisory by default.** The structural
+  edge still drives ordering, dangling-edge, cycle, ownership, and roadmap-linkage checks. An edge
+  fingerprint remains useful provenance that `stamp` and `land` can refresh, but a repository must
+  set `edge_fingerprints = "required"` to make absent or invalid active-edge hashes fail the gate.
+  This policy does not relax frozen `self_hash` tamper detection.
+- **Canonicalization stays deliberately syntactic.** Front matter, line endings, per-line trailing
+  whitespace, and boundary blank lines are normalized. Prose reflow and Markdown formatter syntax
+  rewrites change the hash; the stdlib resolver does not embed a partial Markdown semantic parser.
 - The **product** positioning (tkcs vs OpenLore/OpenSpec/the RAG shortlist) is a separate decision,
   recorded in the consuming repo at `docs/adr/0011-positioning-vs-sdd-agent-memory-and-rag-landscape.md`.

@@ -10,6 +10,7 @@ from typing import Any
 
 CONFIG_NAME = ".doc-contract.toml"
 SCHEMA_VERSION = 1
+EDGE_FINGERPRINT_POLICIES = frozenset({"advisory", "required"})
 
 
 class ConfigError(ValueError):
@@ -32,6 +33,14 @@ class Settings:
     capability_mode: str = "skip"
     capability_command: tuple[str, ...] = ()
     additional_environment_names: tuple[str, ...] = ()
+    edge_fingerprint_policy: str = "advisory"
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.edge_fingerprint_policy, str)
+            or self.edge_fingerprint_policy not in EDGE_FINGERPRINT_POLICIES
+        ):
+            raise ValueError("edge_fingerprint_policy must be 'advisory' or 'required'")
 
     @property
     def required_root_ids(self) -> tuple[str, ...]:
@@ -77,6 +86,14 @@ def load_settings(repo_root: Path, config_path: Path | None = None) -> Settings:
     roadmap = _relative_path(
         raw.get("roadmap", "docs/roadmap.md"), key="roadmap", config_path=path
     )
+    edge_fingerprint_policy = raw.get("edge_fingerprints", "advisory")
+    if (
+        not isinstance(edge_fingerprint_policy, str)
+        or edge_fingerprint_policy not in EDGE_FINGERPRINT_POLICIES
+    ):
+        raise ConfigError(
+            "config-invalid", path, "edge_fingerprints must be 'advisory' or 'required'"
+        )
 
     roots = raw.get("root_nodes")
     if not isinstance(roots, dict):
@@ -128,6 +145,7 @@ def load_settings(repo_root: Path, config_path: Path | None = None) -> Settings:
         root_nodes=root_nodes,
         optional_root_ids=optional_root_ids,
         roadmap=roadmap,
+        edge_fingerprint_policy=edge_fingerprint_policy,
         capability_mode=mode,
         capability_command=command,
         additional_environment_names=environment_names,

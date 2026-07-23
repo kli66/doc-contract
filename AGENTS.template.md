@@ -123,14 +123,18 @@ resolves it into the schedulable DAG (topo-sort + cycle/dangling/overlap/linkage
 hand-kept source. Enforced by the `test_change_dag.py` tripwire. The roadmap prose stays the home for
 *rationale and narrative*, not the edges.
 
-**Hashing policy (fingerprint-by-default + frozen `self_hash`).** Two content hashes, both over the
-*canonical body* (front-matter stripped). (1) **Edge fingerprints:** every `depends_on` edge whose
-target is a doc carries that target's content hash at review time — the **default, not opt-in**. A
-*missing*, empty, `PENDING`, or malformed fingerprint on an active doc-edge is an **ERROR**; a
-*stale* valid fingerprint (target moved) is a
-**WARN** (re-review, then re-stamp). (2) **`self_hash`:** every `frozen` doc stamps a hash of its own
-body; an empty, `PENDING`, malformed, or mismatched value is an **ERROR** (append-only enforced). A fingerprint rides
-the *depender*; a `self_hash` rides the *frozen target*.
+**Hashing policy (advisory edge review + frozen `self_hash`).** Dependency topology is always
+mandatory; its review fingerprints are metadata. With the default `edge_fingerprints = "advisory"`,
+an absent edge hash is accepted, while an explicit empty, `PENDING`, malformed, or stale value is a
+**WARN**. Repositories that set `edge_fingerprints = "required"` make absent and invalid active-edge
+hashes **ERROR** again; stale valid hashes remain **WARN**. `stamp` can record or refresh edge review
+metadata under either policy. Independently, every `frozen` doc's `self_hash` stays strict: empty,
+`PENDING`, malformed, or mismatched values are **ERROR** (append-only enforced).
+
+Both hashes use the *canonical body*: front matter, line-ending differences, per-line trailing
+whitespace, and boundary blank lines are normalized. Prose reflow and Markdown syntax rewrites are
+significant and change the hash. A fingerprint rides the *depender*; a `self_hash` rides the
+*frozen target*.
 
 ## Executing a change → dispatch is one line
 

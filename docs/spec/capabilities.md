@@ -13,6 +13,8 @@ value-free secret scan. An optional project capability command runs in a subproc
 `--offline` is selected; target project modules are never imported into the resolver process.
 Discovery is tracked/declared by default. `--include-untracked` previews and includes provisional
 nodes, and warning output separates the tolerated baseline from newly introduced findings.
+Dependency topology is mandatory; edge review hashes are advisory unless the manifest selects
+`edge_fingerprints = "required"`. Frozen-document `self_hash` validation is always strict.
 
 ### `update`
 
@@ -21,7 +23,8 @@ With `--include-untracked`, print the provisional node preview before writing th
 
 ### `stamp`
 
-Refresh one active node's dependency fingerprints or one frozen node's `self_hash` after review.
+Record or refresh one active node's dependency fingerprints, including under advisory policy, or
+refresh one frozen node's strict `self_hash` after review.
 
 ### `sync`
 
@@ -35,4 +38,6 @@ Plan and apply a hash-guarded, resumable change landing. It previews the complet
 `--dry-run`, journals progress in Git metadata, updates the roadmap and dependent fingerprints, and
 archives tracked or intentionally untracked change folders atomically. A completed landing is an
 idempotent no-op. Intentionally untracked work requires `--include-untracked`; the plan prints those
-nodes before mutation, and the outcome reports baseline, new, and resolved warning counts.
+nodes before mutation, and the outcome reports baseline, new, and resolved warning counts. Landing
+continues to refresh advisory dependent fingerprints without treating their prior absence as an
+invalid preflight.

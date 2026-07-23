@@ -71,6 +71,7 @@ target repository. `scripts/config.py` remains only for legacy vendored tests an
 | `roadmap` | repo-relative roadmap path; always required |
 | `root_nodes` | managed docs outside changes/adr/spec that must self-classify |
 | `optional_roots` | explicit exceptions to required-by-default root nodes |
+| `edge_fingerprints` | `advisory` by default; `required` opts into strict active-edge hashes |
 | `capability` | skipped, optional, or required subprocess boundary |
 | `secret_env_names` | additional credential environment names, never values |
 
@@ -101,8 +102,11 @@ The materialize procedure — turning a bare repo into one under doc-contract:
    manifest. Neither path assumes a `~/.claude` checkout.
 2. **Write `.doc-contract.toml`.** Declare `schema_version`, `repo_name`, `roadmap`, and
    `root_nodes`. Every root is required unless its ID appears in `optional_roots`; the roadmap is
-   always required. Configure capability mode as `skip`, `optional`, or `required`; non-skipped
-   checks must be subprocess commands.
+   always required. Dependency topology is mandatory, while review fingerprints default to
+   `edge_fingerprints = "advisory"`; set `required` only when missing or invalid active-edge hashes
+   should fail the gate. Frozen-document `self_hash` remains strict in either mode. Configure
+   capability mode as `skip`, `optional`, or `required`; non-skipped checks must be subprocess
+   commands.
 3. **Optionally retain the legacy pytest tripwires.** Repositories that vendor the compatibility
    `scripts/` tests can point their test configuration at those copies:
    ```toml

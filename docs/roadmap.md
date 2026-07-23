@@ -15,7 +15,7 @@ persistence: living
 - `docs/changes/archive/2026-07-23-discovery-lifecycle-hardening/` (landed) — tracked/declared discovery, explicit
   untracked opt-in, root-node policy, repository-relative classification, actionable hash states,
   and baseline-vs-new warning reporting; depends on the landed transactional land command
-- `docs/changes/edge-fingerprint-policy/` (proposed) — make dependency fingerprints advisory by
+- `docs/changes/archive/2026-07-23-edge-fingerprint-policy/` (landed) — make dependency fingerprints advisory by
   default while retaining strict frozen-document `self_hash`; depends on the landed discovery and
   lifecycle hardening change
 
@@ -23,7 +23,7 @@ persistence: living
 ```mermaid
 flowchart TD
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
-    edge_fingerprint_policy["edge-fingerprint-policy (proposed)"]
+    edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]

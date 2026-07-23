@@ -24,11 +24,18 @@ _SETTINGS = Settings(
     repo_name=_legacy_config.REPO_NAME,
     root_nodes=dict(ROOT_NODES),
     optional_root_ids=tuple(getattr(_legacy_config, "OPTIONAL_ROOTS", ())),
+    edge_fingerprint_policy=getattr(_legacy_config, "EDGE_FINGERPRINT_POLICY", "advisory"),
 )
 
 
 def _settings(root: Path) -> Settings:
-    return replace(_SETTINGS, repo_root=root.resolve())
+    return replace(
+        _SETTINGS,
+        repo_root=root.resolve(),
+        edge_fingerprint_policy=getattr(
+            _legacy_config, "EDGE_FINGERPRINT_POLICY", "advisory"
+        ),
+    )
 
 
 def resolve(  # noqa: ANN201 - compatibility surface

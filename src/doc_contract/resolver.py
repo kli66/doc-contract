@@ -36,9 +36,11 @@ ERROR (fails the build):
   * an *active* change node with no `roadmap` line, or a roadmap line whose status token
     contradicts the node's front-matter `status` (the global↔node linkage check — this *is*
     the "every changes/*/ folder has a roadmap line" enforcement a skill cannot provide).
+  * absent or invalid active-edge hashes when `edge_fingerprints` is explicitly `required`.
+  * invalid or mismatched frozen-document `self_hash` values under every edge policy.
 WARN (reported, never fails):
   * a cycle.
-  * a *suspect link* — a recorded edge `fingerprint` ≠ the target's current canonical hash
+  * an invalid advisory edge fingerprint, or a stale valid edge fingerprint under either policy
     (the automated drift signal reconciliation does by hand today).
   * a file-ownership overlap between two *active* change nodes (a real merge hazard).
   * a `requires_status` mismatch (depend on an ADR that must be `accepted`, but isn't).
@@ -49,9 +51,9 @@ WARN (reported, never fails):
 
 Fingerprints hash a **canonical form**, never raw bytes — strip the YAML front-matter block
 (so back-filling front-matter does not self-invalidate every fingerprint), normalize line
-endings to `\n`, strip per-line trailing whitespace, single final newline. v1 targets are
-docs only (the repo's only formatter, `ruff`, is Python-only and prose is not reflowed), so
-doc fingerprints are stable day-to-day; a `src/` symbol is never a v1 fingerprint target.
+endings to `\n`, strip per-line trailing whitespace, remove boundary blank lines, and emit one
+final newline. Prose reflow and Markdown syntax rewrites remain significant. v1 targets are docs
+only; a `src/` symbol is never a v1 fingerprint target.
 """
 
 from __future__ import annotations
@@ -637,7 +639,7 @@ def validate(
     roadmap = _roadmap_text(root, settings) if roadmap_override is None else roadmap_override
     adr_text = _adr_citations(root)
 
-    # Edges: unknown target / missing ADR / requires_status / suspect-link.
+    # Edges: unknown target / missing ADR / requires_status / review fingerprint provenance.
     for n in sorted(nodes.values(), key=lambda x: x.id):
         for e in n.depends_on:
             target = nodes.get(e.target)
@@ -671,8 +673,8 @@ def validate(
             if n.active and state in {HashState.EMPTY, HashState.PENDING, HashState.INVALID}:
                 findings.append(
                     Finding(
-                        "ERROR",
-                        f"hash-{state.value}",
+                        "ERROR" if settings.edge_fingerprint_policy == "required" else "WARN",
+                        f"edge-hash-{state.value}",
                         f"{n.id} → {e.target}: fingerprint is {state.value}; "
                         f"review the target and run `doc-contract stamp {n.id}`",
                     )
@@ -688,16 +690,19 @@ def validate(
                             f"(recorded {e.fingerprint}, now {current}); re-review and re-stamp",
                         )
                     )
-            # Fingerprint-by-default: every active edge to a doc target must be stamped. All
-            # depend-on targets are docs (code targets aren't nodes, so can't be depended on) —
-            # a missing fingerprint is therefore always possible-and-required here.
-            if n.active and state == HashState.ABSENT:
+            # Structural dependency edges are always mandatory. Review fingerprints are optional
+            # metadata unless the repository explicitly opts into required enforcement.
+            if (
+                n.active
+                and state == HashState.ABSENT
+                and settings.edge_fingerprint_policy == "required"
+            ):
                 findings.append(
                     Finding(
                         "ERROR",
                         "missing-fingerprint",
                         f"{n.id} → {e.target}: active doc-edge has no fingerprint "
-                        f"(fingerprint-by-default — stamp the target's content hash)",
+                        f"(edge_fingerprints is required — stamp the target's content hash)",
                     )
                 )
 

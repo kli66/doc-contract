@@ -146,13 +146,11 @@ def test_untracked_landing_recovers_and_second_run_is_noop(tmp_path: Path) -> No
 
 def test_active_dependents_receive_the_landed_target_fingerprint(tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    target = root / "docs/changes/transactional/change.md"
-    target_hash = fingerprint(target.read_text(encoding="utf-8"))
     _write(
         root,
         "docs/changes/dependent/change.md",
         "---\nid: dependent\npersistence: ephemeral\nstatus: in-progress\ntrack: test\n"
-        f"depends_on:\n  - transactional\nfingerprints:\n  transactional: {target_hash}\n---\n"
+        "depends_on:\n  - transactional\n---\n"
         "# Dependent\n",
     )
     roadmap = root / "docs/roadmap.md"
@@ -160,6 +158,7 @@ def test_active_dependents_receive_the_landed_target_fingerprint(tmp_path: Path)
         roadmap.read_text(encoding="utf-8") + "- `docs/changes/dependent/` (in-progress)\n",
         encoding="utf-8",
     )
+    assert _settings(root).edge_fingerprint_policy == "advisory"
     outcome = execute_landing(
         root,
         _settings(root),
