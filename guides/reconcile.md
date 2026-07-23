@@ -60,8 +60,11 @@ Goal: leave the durable docs true and the folder as lineage, not load-bearing.
    `docs/spec/capabilities.md` (the `test_capabilities_coverage` tripwire) and any drift-guard the
    change tripped (e.g. a new `CurationAction` needs its `events.py` `_apply` fold branch). Keep
    `uv run pytest -q` + `uv run ruff check .` green.
-6. **Archive** — `git mv docs/changes/<name>/` → `docs/changes/archive/<YYYY-MM-DD>-<name>/`
-   (preserve history; do not delete).
+6. **Land transactionally** — run `doc-contract land docs/changes/<name> --repo-root <repo> --dry-run`,
+   review the complete write/move plan and diff, then rerun without `--dry-run`. The command journals
+   each boundary, hash-checks concurrent edits, updates the roadmap and dependent fingerprints, and
+   preserves history for tracked or intentionally untracked folders. Do not hand-roll a separate
+   `git mv`/stamp/update sequence.
 7. **Emit a short exit note** — what landed, which durable docs you updated, what you captured to
    memory, the archive path.
 

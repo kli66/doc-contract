@@ -136,7 +136,9 @@ the change says otherwise; don't commit unless asked; stop and surface any instr
 contradicts the ADRs / roadmap / code.
 
 Because `CLAUDE.md` imports this file, all of the above is already in every agent's context.
-**Dispatch therefore collapses to one line: "Execute `docs/changes/<name>/`."**
+**Dispatch therefore collapses to one line: "Execute `docs/changes/<name>/`."** Landing is completed
+through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`;
+the transaction owns the status, roadmap, fingerprint, journal, and archive boundaries.
 
 <!-- Repo-specific traps (the {{PROJECT}} invariants that are easy to violate) go in CLAUDE.md, not
      here. Keep this file the portable contract; keep CLAUDE.md the thin @AGENTS.md pointer + traps. -->

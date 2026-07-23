@@ -1,0 +1,201 @@
+"""Command-line interface for explicit, cwd-independent doc-contract checks."""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Sequence
+
+from . import __version__
+from .config import ConfigError, Settings, load_settings, resolve_repo_root
+from .landing import LandingError, LandingPlan, execute_landing
+from .resolver import Finding, resolve, stamp_node, update_roadmap
+from .sync import sync_package
+
+COMMANDS = frozenset({"check", "update", "stamp", "sync", "land"})
+
+
+@dataclass(frozen=True, slots=True)
+class Context:
+    root: Path
+    settings: Settings
+
+
+def _common_parser() -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--repo-root", type=Path, help="target repository root")
+    common.add_argument("--config", type=Path, help="explicit .doc-contract.toml path")
+    return common
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="doc-contract")
+    parser.add_argument("--version", action="version", version=__version__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    common = _common_parser()
+
+    check = subparsers.add_parser("check", parents=[common], help="resolve and validate")
+    check.add_argument(
+        "--offline", action="store_true", help="skip the configured capability subprocess"
+    )
+    subparsers.add_parser("update", parents=[common], help="regenerate the roadmap DAG")
+    stamp = subparsers.add_parser("stamp", parents=[common], help="refresh a node's hashes")
+    stamp.add_argument("node_id")
+    subparsers.add_parser("sync", parents=[common], help="vendor this pinned package")
+    land = subparsers.add_parser("land", parents=[common], help="transactionally archive a change")
+    land.add_argument("change_ref", help="change ID or repository-relative change folder")
+    land.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+    return parser
+
+
+def _context(args: argparse.Namespace) -> Context:
+    config_path = args.config.expanduser().resolve() if args.config is not None else None
+    root = resolve_repo_root(args.repo_root, config_path)
+    settings = load_settings(root, config_path)
+    return Context(root=root, settings=settings)
+
+
+def _print_findings(findings: Sequence[Finding]) -> None:
+    for finding in findings:
+        print(f"{finding.level}: [{finding.code}] {finding.message}")
+
+
+def _capability_status(settings: Settings, *, offline: bool) -> tuple[str, Finding | None]:
+    if settings.capability_mode == "skip":
+        return "live skipped", None
+    if offline:
+        if settings.capability_mode == "required":
+            return "live skipped", Finding(
+                "ERROR", "capability-check-required", "required live check was skipped"
+            )
+        return "live skipped", None
+    try:
+        result = subprocess.run(
+            settings.capability_command,
+            cwd=settings.repo_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "live skipped", Finding(
+            "ERROR",
+            "capability-check-failed",
+            f"capability subprocess unavailable ({type(exc).__name__})",
+        )
+    if result.returncode:
+        return "live failed", Finding(
+            "ERROR",
+            "capability-check-failed",
+            f"capability subprocess exited {result.returncode}",
+        )
+    return "live passed", None
+
+
+def _check(context: Context, *, offline: bool) -> int:
+    result = resolve(context.root, context.settings)
+    live_status, live_finding = _capability_status(context.settings, offline=offline)
+    findings = list(result.findings)
+    if live_finding is not None:
+        findings.append(live_finding)
+    _print_findings(findings)
+    errors = [finding for finding in findings if finding.level == "ERROR"]
+    warnings = [finding for finding in findings if finding.level == "WARN"]
+    offline_status = "offline verified" if not result.errors else "offline failed"
+    print(
+        f"{offline_status}; {live_status}; {len(errors)} error(s), "
+        f"{len(warnings)} warning(s); {len(result.nodes)} nodes"
+    )
+    return 1 if errors else 0
+
+
+def _update(context: Context) -> int:
+    result = resolve(context.root, context.settings)
+    if result.errors:
+        _print_findings(result.errors)
+        print("roadmap not updated because validation failed")
+        return 1
+    changed = update_roadmap(context.root, context.settings)
+    print("roadmap updated" if changed else "roadmap already current")
+    return 0
+
+
+def _stamp(context: Context, node_id: str) -> int:
+    try:
+        changed = stamp_node(context.root, context.settings, node_id)
+    except ValueError as exc:
+        print(f"ERROR: [stamp-failed] {exc}", file=sys.stderr)
+        return 1
+    print(f"{node_id} stamped" if changed else f"{node_id} already current")
+    return 0
+
+
+def _sync(context: Context) -> int:
+    changed = sync_package(context.root)
+    print("vendored package updated" if changed else "vendored package already current")
+    return 0
+
+
+def _print_plan(plan: LandingPlan) -> None:
+    print(
+        f"land plan: {plan.change_id}; {plan.source} -> {plan.archive}; "
+        f"tracking={plan.tracking}; {len(plan.mutations)} mutation(s)"
+    )
+    print("input/output tree:", plan.input_tree_hash, "->", plan.output_tree_hash)
+    print(plan.diff, end="" if plan.diff.endswith("\n") else "\n")
+
+
+def _land(context: Context, change_ref: str, *, dry_run: bool) -> int:
+    try:
+        outcome = execute_landing(
+            context.root,
+            context.settings,
+            change_ref,
+            dry_run=dry_run,
+            on_plan=_print_plan,
+        )
+    except LandingError as exc:
+        print(f"ERROR: [{type(exc).__name__}] {exc}", file=sys.stderr)
+        return 1
+    if outcome.already_landed:
+        print(f"{change_ref} already landed; no mutations")
+        return 0
+    if dry_run:
+        print("dry-run; no mutations")
+        return 0
+    for finding in outcome.final_findings:
+        print(f"{finding.level}: [{finding.code}] {finding.message}")
+    if any(finding.level == "ERROR" for finding in outcome.final_findings):
+        print("landing applied but final validation failed; journal retained", file=sys.stderr)
+        return 1
+    print(f"landed {outcome.plan.change_id if outcome.plan else change_ref}; {outcome.capability_status}")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        context = _context(args)
+    except ConfigError as exc:
+        print(f"ERROR: [{exc.code}] {exc.path}: {exc.detail}", file=sys.stderr)
+        return 2
+    if args.command == "check":
+        return _check(context, offline=args.offline)
+    if args.command == "update":
+        return _update(context)
+    if args.command == "stamp":
+        return _stamp(context, args.node_id)
+    if args.command == "sync":
+        return _sync(context)
+    if args.command == "land":
+        return _land(context, args.change_ref, dry_run=args.dry_run)
+    raise AssertionError(args.command)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -140,6 +140,32 @@ def test_missing_roadmap_line_is_error(tmp_path: Path) -> None:
     assert "no-roadmap-line" in _codes(res.errors, "ERROR")
 
 
+def test_archived_change_keeps_declared_ephemeral_persistence(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "docs/changes/archive/2026-07-23-landed/change.md",
+        _fm("landed", status="landed", persistence="ephemeral"),
+    )
+    _write(tmp_path, "docs/roadmap.md", _ROADMAP_HEAD + "# roadmap\n")
+    res = resolve(tmp_path)
+    assert res.nodes["landed"].persistence == "ephemeral"
+    assert "unstamped-frozen" not in _codes(res.warnings, "WARN")
+
+
+def test_docs_archive_remains_frozen_and_tamper_guarded(tmp_path: Path) -> None:
+    body = "---\n# reference\n\nBODY\n"
+    stamp = fingerprint(body)
+    reference = _write(
+        tmp_path,
+        "docs/archive/reference.md",
+        f"---\nself_hash: {stamp}\n---\n# reference\n\nBODY\n",
+    )
+    _write(tmp_path, "docs/roadmap.md", _ROADMAP_HEAD + "# roadmap\n")
+    reference.write_text(reference.read_text(encoding="utf-8") + "EDIT\n", encoding="utf-8")
+    res = resolve(tmp_path)
+    assert "self-hash-mismatch" in _codes(res.errors, "ERROR")
+
+
 def test_roadmap_status_mismatch_is_error(tmp_path: Path) -> None:
     _write(tmp_path, "docs/changes/a/change.md", _fm("a", status="proposed"))
     _write(tmp_path, "docs/roadmap.md", _roadmap("a|(blocked)"))

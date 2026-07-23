@@ -1,0 +1,11 @@
+schema_version = 1
+repo_name = "doc-contracts"
+roadmap = "docs/roadmap.md"
+required_roots = ["roadmap"]
+
+[root_nodes]
+capabilities = "docs/spec/capabilities.md"
+roadmap = "docs/roadmap.md"
+
+[capability]
+mode = "skip"

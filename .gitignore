@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.doc-contract/vendor/
+.doc-contract-manifest.json
+build/
+dist/
+src/*.egg-info/
+src/doc_contract/_version.py

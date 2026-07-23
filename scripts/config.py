@@ -26,12 +26,12 @@ from pathlib import Path
 
 from doc_tripwire import CapabilityCheck
 
-# This file sits at <repo>/.claude/skills/doc-contract/scripts/config.py, so the repo root is
-# five parents up. A repo that installs the skill elsewhere repoints only this line.
-REPO_ROOT = Path(__file__).resolve().parents[4]
+# This checkout keeps the skill's scripts at <repo>/scripts, so the repository root is two
+# parents up. Repoint this seam if the skill is installed under `.claude/skills/...` elsewhere.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # EDIT: cosmetic label for this repo, surfaced in resolver messages/ids.
-REPO_NAME = "REPLACE_ME"
+REPO_NAME = "doc-contracts"
 
 # EDIT: managed docs outside changes/adr/spec that must still self-classify — promoted to first-class
 # nodes so `missing-persistence` covers them and no managed doc sits loose. Persistence is read from
@@ -39,6 +39,7 @@ REPO_NAME = "REPLACE_ME"
 # A minimal repo starts with just agents + roadmap and grows this set as docs are added.
 ROOT_NODES: dict[str, str] = {
     "agents": "AGENTS.md",
+    "capabilities": "docs/spec/capabilities.md",
     "roadmap": "docs/roadmap.md",
 }
 
@@ -55,7 +56,20 @@ CAPABILITY_DOC = "docs/spec/capabilities.md"
 # parser, its tool registry, ...) and returns the live name set the capability doc must mirror.
 # Leave empty () and the coverage tripwire is a no-op until the repo has such a surface. See the
 # commented tkcs example at the end of this file for the shape of a real enumerator.
-CAPABILITY_ENUMERATORS: tuple[CapabilityCheck, ...] = ()
+def _cli_commands() -> set[str]:
+    from doc_contract.cli import COMMANDS
+
+    return set(COMMANDS)
+
+
+CAPABILITY_ENUMERATORS: tuple[CapabilityCheck, ...] = (
+    CapabilityCheck(
+        name="CLI commands",
+        surface=_cli_commands,
+        section="CLI commands",
+        label="CLI command",
+    ),
+)
 
 
 # ------------------------------------------------------------------------------------------------

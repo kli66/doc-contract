@@ -1,0 +1,42 @@
+[project]
+name = "doc-contracts"
+dynamic = ["version"]
+description = "Portable, fail-closed documentation contract resolver"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+doc-contract = "doc_contract.cli:main"
+
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+lint = [
+    "commitizen>=4.0.0",
+    "ruff>=0.12.0",
+]
+test = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "scripts"]
+pythonpath = ["src", "scripts"]
+
+[tool.setuptools_scm]
+tag_regex = "^v(?P<version>\\d+!?(?:\\d+\\.)*\\d+(?:[-+].*)?)$"
+fallback_version = "0.0.0"
+version_file = "src/doc_contract/_version.py"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "scm"
+version_scheme = "semver"
+tag_format = "v$version"
+update_changelog_on_bump = true
+major_version_zero = true
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true
