@@ -18,6 +18,9 @@ persistence: living
 - `docs/changes/archive/2026-07-23-edge-fingerprint-policy/` (landed) — make dependency fingerprints advisory by
   default while retaining strict frozen-document `self_hash`; depends on the landed discovery and
   lifecycle hardening change
+- `docs/changes/archive/2026-07-23-portable-install-contract-convergence/` — templates and install guidance now use
+  `.doc-contract.toml` plus the packaged/vendored CLI, with sync-to-check proven in a clean
+  temporary repository; depends on the landed edge-fingerprint policy
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
@@ -25,9 +28,11 @@ flowchart TD
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
+    portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     discovery_lifecycle_hardening --> edge_fingerprint_policy
+    edge_fingerprint_policy --> portable_install_contract_convergence
     global_cwd_independent_cli --> transactional_land_command
     secret_handling_guardrails --> global_cwd_independent_cli
     transactional_land_command --> discovery_lifecycle_hardening

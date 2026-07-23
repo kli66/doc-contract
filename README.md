@@ -8,29 +8,18 @@ persistence: living
 `doc-contract` command validates an explicitly selected repository, so invoking it from another
 working directory cannot silently resolve an empty or unrelated tree.
 
-## Install
+## Set up a fresh repository
+
+Install the package wherever the setup command will run:
 
 ```console
 pip install /path/to/doc-contracts
 doc-contract --version
 ```
 
-The runtime package has no third-party dependencies and does not read `~/.claude`. Python 3.12 or
-newer is required.
+The runtime package has no third-party dependencies. Python 3.12 or newer is required.
 
-For an air-gapped or vendored installation, run `doc-contract sync --repo-root /path/to/repo` while
-the package is available. The repository can then use:
-
-```console
-python /path/to/repo/.doc-contract/doc_contract_cli.py check --repo-root /path/to/repo
-```
-
-The sync command writes `.doc-contract-manifest.json` with the package version and content hashes.
-It is idempotent and can be rerun to update a pin.
-
-## Configure
-
-Create `.doc-contract.toml` at the repository root:
+Create `.doc-contract.toml` in the target repository:
 
 ```toml
 schema_version = 1
@@ -46,6 +35,43 @@ capabilities = "docs/spec/capabilities.md"
 [capability]
 mode = "skip"
 ```
+
+Copy `AGENTS.template.md` to the repository's `AGENTS.md` and adapt its project placeholders. Then
+seed the configured roadmap:
+
+````markdown
+---
+persistence: living
+---
+
+# Roadmap
+
+<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
+```mermaid
+flowchart TD
+```
+<!-- END GENERATED DAG -->
+````
+
+From any working directory, validate the explicitly selected repository:
+
+```console
+doc-contract check --repo-root /path/to/repo --offline
+```
+
+To keep an air-gapped copy in the target, sync while the package is available and then run the
+generated launcher. The second command needs only the target repository and Python:
+
+```console
+doc-contract sync --repo-root /path/to/repo
+cd /an/unrelated/directory
+python /path/to/repo/.doc-contract/doc_contract_cli.py check --repo-root /path/to/repo --offline
+```
+
+`sync` writes `.doc-contract-manifest.json` with the package version and content hashes. It is
+idempotent and can be rerun to update the pin.
+
+## Configuration contract
 
 `root_nodes` classifies managed documents outside the normal change, ADR, and spec discovery tree.
 Every declared root is required by default. `optional_roots` is the explicit exception list; the
@@ -63,12 +89,13 @@ Repository selection precedence is explicit: `--repo-root`, then the parent of `
 current Git root. Missing config, a missing roadmap, a missing required root, and zero discovered
 nodes fail nonzero. The resolver never falls back to its installation directory.
 
-An optional project check stays outside the stdlib resolver process:
+An optional project check stays outside the stdlib resolver process. Its command is repository
+specific; for example:
 
 ```toml
 [capability]
 mode = "optional" # skip, optional, or required
-command = ["python", "-m", "pytest", "-q", "scripts/test_capabilities_coverage.py"]
+command = ["python", "-m", "pytest", "-q", "tests/test_documented_capabilities.py"]
 ```
 
 Subprocess output is suppressed so a project check cannot copy credentials into resolver reports.
@@ -99,8 +126,8 @@ move; advisory hashes are refreshed but are not landing prerequisites. Rerunning
 returns success without changing files or the Git index. Interrupted landings resume from the
 journal under Git metadata, and concurrent edits fail closed.
 
-Legacy `PYTHONPATH=scripts python -m dag` and flat `secret_scan` imports remain compatibility paths;
-new automation should use the installed command and `.doc-contract.toml`.
+The flat modules under `scripts/` and their pytest tripwires remain compatibility-only for existing
+consumers. New repositories configure `.doc-contract.toml` and invoke the packaged or vendored CLI.
 
 ## Development
 

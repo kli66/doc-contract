@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -320,6 +321,65 @@ def test_sync_writes_pinned_manifest_and_is_idempotent(
 
     assert main(["sync", "--repo-root", str(repo)]) == 0
     assert "already current" in capsys.readouterr().out
+
+
+def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "fresh-repo"
+    _write(
+        repo,
+        ".doc-contract.toml",
+        _config(roots={"contract": "AGENTS.md", "roadmap": "docs/roadmap.md"}),
+    )
+    _write(repo, "AGENTS.md", "---\npersistence: living\n---\n# Operating contract\n")
+    _write(repo, "docs/roadmap.md", "---\npersistence: living\n---\n# Roadmap\n")
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+
+    elsewhere = tmp_path / "unrelated-cwd"
+    elsewhere.mkdir()
+    clean_environment = os.environ.copy()
+    clean_environment.pop("PYTHONPATH", None)
+    synced = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "doc_contract.cli",
+            "sync",
+            "--repo-root",
+            str(repo),
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert synced.returncode == 0, synced.stderr
+    assert "vendored package updated" in synced.stdout
+
+    launcher = repo / ".doc-contract/doc_contract_cli.py"
+    checked = subprocess.run(
+        [
+            sys.executable,
+            str(launcher),
+            "check",
+            "--repo-root",
+            str(repo),
+            "--offline",
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert "offline verified; live skipped" in checked.stdout
+    assert "2 nodes" in checked.stdout
+    assert launcher.is_file()
+    assert not (repo / ".claude").exists()
 
 
 def test_capability_surface_is_explicit() -> None:

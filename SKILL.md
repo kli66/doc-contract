@@ -11,10 +11,9 @@ skill is (a) the **machinery** that enforces it — a stdlib change-DAG resolver
 kept out of the human-facing `docs/` tree because a resolver is an implementation detail — and (b) the
 **lifecycle verbs** that operationalize the protocol the contract states tersely.
 
-It is **tool-agnostic** — plain Python run via `pytest` or the installed `doc-contract` command,
-with zero third-party runtime dependencies.
-Colleagues who don't use Claude still get the discipline through the tests + the `AGENTS.md`
-contract. It is *not* a Claude plugin.
+It is **tool-agnostic** — the installed or vendored `doc-contract` command has zero third-party
+runtime dependencies. Colleagues who do not use this skill still get the discipline through the
+CLI and the `AGENTS.md` contract. The skill supplies authoring workflows; it is not the runtime.
 
 ## Sub-commands (dispatch on the first arg)
 
@@ -36,26 +35,19 @@ skill, distinct verbs.
 ## Layout
 
 ```
-.claude/skills/doc-contract/
-  SKILL.md                      this file — the sub-command dispatcher + how to run/install
-  DESIGN-RATIONALE.md           why bespoke over OpenSpec/OpenLore (air-gap + the 3 deltas) — read before "why not just use X?"
-  AGENTS.template.md            the portable, repo-agnostic contract to adapt into a new repo's AGENTS.md
-  guides/
-    new-change.md               the `new-change` procedure (author a change folder)
-    reconcile.md                the `reconcile` procedure (entry/exit drift-check)
-  src/doc_contract/
-    cli.py                      explicit check/update/stamp/sync/land command boundary
-    config.py                   `.doc-contract.toml` loader; never imports target code
-    resolver.py                 change-DAG resolver + ERROR/WARN taxonomy + Mermaid render
-    secret_scan.py              value-free repository scanner
-    landing.py                  hash-guarded, journaled landing transaction engine
-    sync.py                     vendored package + version/pin manifest writer
-  scripts/
-    dag.py                      compatibility adapter for the packaged resolver
-    doc_tripwire.py             INVARIANT — the doc↔code coverage helper (+ CapabilityCheck contract)
-    config.py                   PARAMETER  — the per-project seam (the only file a new repo edits)
-    test_change_dag.py          INVARIANT — the change-DAG linkage tripwire
-    test_capabilities_coverage.py  INVARIANT — the consumer-surface coverage tripwire
+doc-contracts distribution/
+  SKILL.md                      this workflow dispatcher
+  AGENTS.template.md            portable operating contract
+  guides/                       new-change and reconciliation procedures
+  src/doc_contract/             packaged CLI, config, resolver, scanner, landing, and sync code
+  scripts/                      compatibility-only flat adapters and pytest tripwires
+
+target repository/
+  .doc-contract.toml            sole resolver configuration input
+  AGENTS.md                     adapted portable operating contract
+  docs/roadmap.md               living roadmap and generated DAG
+  .doc-contract/                optional vendored CLI and package produced by `sync`
+  .doc-contract-manifest.json   optional package version and content-hash pin
 ```
 
 **Invariant vs. parameter is the whole design.** The package is invariant. Everything
@@ -95,11 +87,15 @@ doc-contract land docs/changes/<name> --repo-root /path/to/repo
 
 ## Install into a new repo — `install`
 
-The materialize procedure — turning a bare repo into one under doc-contract:
+`/doc-contract install` is this skill's guided materialization workflow. `doc-contract sync` is a
+CLI command within that workflow: it writes the optional vendored runtime, not the operating
+contract or agent-client integration.
 
-1. **Install or vendor the package.** Use `pip install /path/to/doc-contracts`, or run
-   `doc-contract sync --repo-root /path/to/repo` to create the air-gapped vendor tree and pin
-   manifest. Neither path assumes a `~/.claude` checkout.
+To turn a bare repository into one under doc-contract:
+
+1. **Make the package available.** Use `pip install /path/to/doc-contracts` for setup and normal
+   automation. A later `doc-contract sync --repo-root /path/to/repo` can create an air-gapped
+   vendor tree and pin manifest.
 2. **Write `.doc-contract.toml`.** Declare `schema_version`, `repo_name`, `roadmap`, and
    `root_nodes`. Every root is required unless its ID appears in `optional_roots`; the roadmap is
    always required. Dependency topology is mandatory, while review fingerprints default to
@@ -107,28 +103,22 @@ The materialize procedure — turning a bare repo into one under doc-contract:
    should fail the gate. Frozen-document `self_hash` remains strict in either mode. Configure
    capability mode as `skip`, `optional`, or `required`; non-skipped checks must be subprocess
    commands.
-3. **Optionally retain the legacy pytest tripwires.** Repositories that vendor the compatibility
-   `scripts/` tests can point their test configuration at those copies:
-   ```toml
-   [tool.pytest.ini_options]
-   testpaths = ["tests", ".claude/skills/doc-contract/scripts"]
-   pythonpath = ["src", ".claude/skills/doc-contract/scripts"]
-
-   [tool.basedpyright]  # or mypy/pyright — the core is strict-clean stdlib
-   include  = ["src", ".claude/skills/doc-contract/scripts"]
-   extraPaths = ["src", ".claude/skills/doc-contract/scripts"]
-   ```
-   New automation invokes the installed command directly; these paths exist only for repositories
-   retaining the flat-import compatibility suite.
-4. **Adapt the contract.** Copy `AGENTS.template.md` → the repo's `AGENTS.md`, fill the
-   `{{PLACEHOLDER}}` bits, and keep repo-specific traps in `CLAUDE.md` (thin `@AGENTS.md` pointer),
-   never in `AGENTS.md`.
-5. **Seed the roadmap.** Create `docs/roadmap.md` with a `persistence: living` header and the two
-   generated-DAG markers (run `doc-contract update`; on first run it prints the block + where to
-   paste it). The resolver needs a roadmap to run the linkage check.
-6. **Green the gate.** Run `doc-contract check --repo-root ... --offline` plus the repository's
-   test suite. The first run surfaces every
+3. **Adapt the contract.** Copy `AGENTS.template.md` to `AGENTS.md`, fill its project placeholders,
+   and keep any client-specific pointer files optional and thin.
+4. **Seed the roadmap.** Create `docs/roadmap.md` with a `persistence: living` header and the two
+   generated-DAG markers. Run `doc-contract update --repo-root /path/to/repo` after the configuration and
+   initial documents are valid.
+5. **Optionally vendor the runtime.** Run `doc-contract sync --repo-root /path/to/repo` while the
+   package is available. Thereafter the repository can run
+   `python /path/to/repo/.doc-contract/doc_contract_cli.py ...` without the package installation.
+6. **Green the gate.** From any directory, run
+   `doc-contract check --repo-root /path/to/repo --offline` or the vendored equivalent, plus the
+   repository's own test suite. The first run surfaces every
    unclassified doc (`missing-persistence`) — add the `persistence:` headers it names.
+
+Repositories already using the flat modules in `scripts/` may retain them and their pytest
+tripwires as an explicitly compatibility-only suite. Do not use `scripts/config.py`, flat imports,
+or a client-specific skill directory as the configuration or execution boundary for new installs.
 
 ## Zero-dep invariant
 

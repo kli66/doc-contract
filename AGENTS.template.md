@@ -1,29 +1,32 @@
+---
+persistence: living
+---
 <!--
   PORTABLE CONTRACT TEMPLATE — copy this to a new repo's AGENTS.md and fill the {{PLACEHOLDERS}}.
   This is the *invariant* scheme (the taxonomy, persistence model, change protocol, dependency-chain
-  + hashing rules). It is repo-agnostic on purpose. Everything project-specific goes in two places,
-  never here: (1) the parameter values in .claude/skills/doc-contract/scripts/config.py, and
-  (2) the "project traps" in the repo's CLAUDE.md. Delete this comment block after adapting.
+  + hashing rules). It is repo-agnostic on purpose. Put project-specific managed-document paths and
+  check commands in .doc-contract.toml; put project traps in the agent-client file your repo uses,
+  if any. Delete this comment block after adapting.
 -->
 
 # AGENTS.md — how to work in this repo (the operating contract)
 
-The durable operating contract for any agent (Claude or otherwise) touching this repo. `CLAUDE.md`
-is a thin pointer here; project-specific traps live there. The doc-contract scheme below is
-enforced by the tracked skill at `.claude/skills/doc-contract/` (a stdlib change-DAG resolver + two
-coverage tripwires); the contract you are reading is what those tools keep honest.
+The durable operating contract for any agent touching this repo. Client-specific instruction files
+are optional thin pointers here plus project traps; they do not configure doc-contract. The
+stdlib-only packaged or vendored `doc-contract` CLI reads `.doc-contract.toml` and keeps this
+contract's mechanically checkable parts honest.
 
 ## The doc taxonomy (where each kind of doc lives)
 
 ```
 CONTEXT.md              glossary — domain language only
 AGENTS.md               this file — the operating contract + change/handoff protocol
-CLAUDE.md               thin → @AGENTS.md + project traps
+.doc-contract.toml      canonical resolver configuration
 docs/
   adr/                  frozen WHY — decisions; supersede in place (append-only)
   roadmap.md            cross-change order — edges owned by change front-matter, rendered here (living)
   spec/                 the what-now tier: living surface + reference + deferred registers
-    capabilities.md     living — tripwire-guarded consumer surface (scripts/test_capabilities_coverage.py)
+    capabilities.md     living — optional project-check-guarded consumer surface
     README.md           what the spec tier is + the enforcement rule
     <reference>.md      frozen-ish durable evidence/reference behind the ADRs
     <register>.md       deferred backlog — entries gated by a per-entry Trigger
@@ -31,17 +34,13 @@ docs/
     <name>/             change.md  (split into proposal/design/tasks only if large)
     archive/<date>-<name>/   landed changes
   archive/              superseded history kept for lineage
-.claude/skills/
-  doc-contract/       the enforcement tooling as a tracked, portable skill (NOT under docs/; docs/
-    scripts/            is human-facing only). scripts/{dag.py, doc_tripwire.py} = invariant core;
-                        scripts/config.py = this repo's parameter seam; test_*.py = the tripwires.
+.doc-contract/          optional vendored CLI + stdlib package written by `doc-contract sync`
 ```
-<!-- If this repo keeps its doc tree somewhere other than docs/, repoint DOC_ROOTS in config.py
-     to match, and edit the tree above. -->
+<!-- Agent-client pointer files are optional and may be added to the tree when the repo uses them. -->
 
 **Every managed doc carries a `persistence:` header and is a node in the change-DAG resolver** — so
 none sits unclassified (`missing-persistence` is an ERROR). That includes the top-level docs above
-(`CONTEXT.md`, `AGENTS.md`, `CLAUDE.md`, `docs/roadmap.md`, `docs/spec/{capabilities,README}.md`) and
+(`CONTEXT.md`, `AGENTS.md`, `docs/roadmap.md`, `docs/spec/{capabilities,README}.md`) and
 any other managed doc — enumerate them in `.doc-contract.toml` `root_nodes`. Roots are required by
 default; only IDs explicitly listed in `optional_roots` may be absent, and their omission is still
 reported. `docs/archive/` lineage is node-ified too (frozen, `self_hash`-guarded), so no managed doc
@@ -66,12 +65,12 @@ Every doc carries four attributes; the maintenance model falls out of them:
 
 **The rule:** minimise the living set, and no doc is "living on good intentions." A living doc earns
 an automated tripwire **only if its content is a function of code** — which is why the
-tripwire-guarded living set stays small and specific: `capabilities.md` (the consumer surface,
-`scripts/test_capabilities_coverage.py`) **and** the change-DAG linkage
-(`scripts/test_change_dag.py`, which makes the roadmap's edges a function of front-matter data) —
-while the glossary/ADRs/rationale stay human-judged. Tractability is the sorting function: if you
-can't test it, it isn't an enforced-living doc. A doc whose content is *not* a function of code is
-not homeless: forward-looking, trigger-gated work is `deferred`, and each entry's **Trigger** is its
+tripwire-guarded living set stays small and specific: `capabilities.md` (the consumer surface, when
+configured through `.doc-contract.toml`'s capability command) **and** the packaged change-DAG linkage
+check, which makes the roadmap's edges a function of front-matter data — while the
+glossary/ADRs/rationale stay human-judged. Tractability is the sorting function: if you can't test
+it, it isn't an enforced-living doc. A doc whose content is *not* a function of code is not
+homeless: forward-looking, trigger-gated work is `deferred`, and each entry's **Trigger** is its
 forcing function. The set is closed — every doc is `frozen`, `ephemeral`, `living`, or `deferred`.
 
 ## Deferred registers — the sanctioned home for trigger-gated backlogs
@@ -117,11 +116,11 @@ the durable home for open work; ADRs + `docs/roadmap.md` are the source of truth
 
 **Dependency-chain rule.** Every change declares its **upstream dependencies** (`depends_on`, *one
 direction only* — dependents are computed) and the **files it owns**, in YAML front-matter on its
-`change.md`/`proposal.md`. That front-matter is the **canonical owner of order**: `scripts/dag.py`
+`change.md`/`proposal.md`. That front-matter is the **canonical owner of order**: `doc-contract`
 resolves it into the schedulable DAG (topo-sort + cycle/dangling/overlap/linkage checks) and
 `docs/roadmap.md` carries a **generated** Mermaid view of it — the diagram is a rendered view, not the
-hand-kept source. Enforced by the `test_change_dag.py` tripwire. The roadmap prose stays the home for
-*rationale and narrative*, not the edges.
+hand-kept source. Enforced by `doc-contract check`. The roadmap prose stays the home for *rationale
+and narrative*, not the edges.
 
 **Hashing policy (advisory edge review + frozen `self_hash`).** Dependency topology is always
 mandatory; its review fingerprints are metadata. With the default `edge_fingerprints = "advisory"`,
@@ -144,12 +143,12 @@ test + lint gate green at each boundary; preserve task detail verbatim; docs/con
 the change says otherwise; don't commit unless asked; stop and surface any instruction that
 contradicts the ADRs / roadmap / code.
 
-Because `CLAUDE.md` imports this file, all of the above is already in every agent's context.
-**Dispatch therefore collapses to one line: "Execute `docs/changes/<name>/`."** Landing is completed
+Once the repository's agent setup loads this contract, dispatch collapses to one line:
+**"Execute `docs/changes/<name>/`."** Landing is completed
 through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns
 the status, roadmap, fingerprint, journal, and archive boundaries.
 
-<!-- Repo-specific traps (the {{PROJECT}} invariants that are easy to violate) go in CLAUDE.md, not
-     here. Keep this file the portable contract; keep CLAUDE.md the thin @AGENTS.md pointer + traps. -->
+<!-- Repo-specific traps (the {{PROJECT}} invariants that are easy to violate) belong in the
+     client-specific agent file, if one exists. Keep this file the portable operating contract. -->
