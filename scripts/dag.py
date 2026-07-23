@@ -23,6 +23,7 @@ _SETTINGS = Settings(
     repo_root=REPO_ROOT,
     repo_name=_legacy_config.REPO_NAME,
     root_nodes=dict(ROOT_NODES),
+    optional_root_ids=tuple(getattr(_legacy_config, "OPTIONAL_ROOTS", ())),
 )
 
 
@@ -30,20 +31,27 @@ def _settings(root: Path) -> Settings:
     return replace(_SETTINGS, repo_root=root.resolve())
 
 
-def resolve(root: Path = REPO_ROOT):  # noqa: ANN201 - compatibility surface
-    return _resolve(root, _settings(root))
+def resolve(  # noqa: ANN201 - compatibility surface
+    root: Path = REPO_ROOT, *, include_untracked: bool = False
+):
+    return _resolve(root, _settings(root), include_untracked=include_untracked)
 
 
-def update_roadmap(root: Path = REPO_ROOT) -> bool:
-    return _update_roadmap(root, _settings(root))
+def update_roadmap(root: Path = REPO_ROOT, *, include_untracked: bool = False) -> bool:
+    return _update_roadmap(root, _settings(root), include_untracked=include_untracked)
 
 
 def _main(argv: list[str]) -> int:
+    include_untracked = "--include-untracked" in argv
     if "--update" in argv:
-        changed = update_roadmap()
+        preview = resolve(include_untracked=include_untracked)
+        for record in preview.discovery:
+            if record.included:
+                print(f"PREVIEW: [untracked-node] {record.node_id}: {record.path}")
+        changed = update_roadmap(include_untracked=include_untracked)
         print("roadmap.md updated" if changed else "roadmap.md already current")
         return 0
-    result = resolve()
+    result = resolve(include_untracked=include_untracked)
     for finding in result.findings:
         print(f"{finding.level}: [{finding.code}] {finding.message}")
     print(

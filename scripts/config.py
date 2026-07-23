@@ -43,6 +43,9 @@ ROOT_NODES: dict[str, str] = {
     "roadmap": "docs/roadmap.md",
 }
 
+# Root nodes are required by default. List intentionally absent installation-specific roots here.
+OPTIONAL_ROOTS: tuple[str, ...] = ("agents", "capabilities")
+
 # v1 fingerprint targets are docs only: a code formatter is language-specific and prose is not
 # reflowed, so doc fingerprints are stable day-to-day; a `src/` symbol is never a v1 target. Kept as
 # an explicit knob so a future code-aware version flips it per-repo.

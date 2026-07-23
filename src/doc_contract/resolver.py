@@ -58,9 +58,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 from .config import Settings
@@ -214,6 +216,26 @@ def fingerprint(text: str) -> str:
     return hashlib.sha256(canonical_form(text).encode("utf-8")).hexdigest()[:16]
 
 
+class HashState(str, Enum):
+    ABSENT = "absent"
+    EMPTY = "empty"
+    PENDING = "pending"
+    INVALID = "invalid"
+    VALID = "valid"
+
+
+def hash_state(value: str | None) -> HashState:
+    if value is None:
+        return HashState.ABSENT
+    if not value.strip():
+        return HashState.EMPTY
+    if value.strip().upper() == "PENDING":
+        return HashState.PENDING
+    if not re.fullmatch(r"[0-9a-f]{16}", value.strip()):
+        return HashState.INVALID
+    return HashState.VALID
+
+
 # --------------------------------------------------------------------------- model
 
 
@@ -255,6 +277,7 @@ class Resolution:
     nodes: dict[str, Node]
     findings: list[Finding]
     topo_order: list[str]
+    discovery: tuple["DiscoveryRecord", ...] = ()
 
     @property
     def errors(self) -> list[Finding]:
@@ -263,6 +286,42 @@ class Resolution:
     @property
     def warnings(self) -> list[Finding]:
         return [f for f in self.findings if f.level == "WARN"]
+
+
+@dataclass(frozen=True)
+class DiscoveryRecord:
+    node_id: str
+    path: str
+    included: bool
+
+
+@dataclass(frozen=True)
+class DiscoveryResult:
+    nodes: dict[str, Node]
+    findings: tuple[Finding, ...]
+    records: tuple[DiscoveryRecord, ...]
+
+
+@dataclass(frozen=True)
+class WarningDelta:
+    baseline: tuple[Finding, ...]
+    introduced: tuple[Finding, ...]
+    resolved: tuple[Finding, ...]
+
+
+def warning_delta(baseline: list[Finding] | tuple[Finding, ...], current: list[Finding] | tuple[Finding, ...]) -> WarningDelta:
+    def key(finding: Finding) -> tuple[str, str]:
+        if finding.code == "untracked-node-included":
+            return finding.code, finding.message.split(" ", 1)[0]
+        return finding.code, finding.message
+
+    before = {key(finding): finding for finding in baseline if finding.level == "WARN"}
+    after = {key(finding): finding for finding in current if finding.level == "WARN"}
+    return WarningDelta(
+        baseline=tuple(after[item] for item in sorted(before.keys() & after.keys())),
+        introduced=tuple(after[item] for item in sorted(after.keys() - before.keys())),
+        resolved=tuple(before[item] for item in sorted(before.keys() - after.keys())),
+    )
 
 
 # --------------------------------------------------------------------------- discovery
@@ -285,22 +344,67 @@ def _doc_path(root: Path, key: str, settings: Settings | None = None) -> Path:
     return root / _DOC_PATHS[key]
 
 
-def _infer_persistence(path: Path, declared: str | None) -> str | None:
-    parts = path.parts
+def _infer_persistence(root: Path, path: Path, declared: str | None) -> str | None:
+    parts = path.resolve().relative_to(root.resolve()).parts
     # `docs/changes/archive/` is change lineage and keeps its declared class;
     # only ADRs and the separate `docs/archive/` tree are directory-frozen.
-    if "adr" in parts or ("archive" in parts and "changes" not in parts):
+    if parts[:2] == ("docs", "adr") or parts[:2] == ("docs", "archive"):
         return "frozen"
     return declared
 
 
-def discover_nodes(root: Path, settings: Settings) -> dict[str, Node]:
+def _tracked_paths(root: Path) -> set[str] | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "docs"],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {item for item in result.stdout.decode("utf-8").split("\0") if item}
+
+
+def discover(
+    root: Path,
+    settings: Settings,
+    *,
+    include_untracked: bool = False,
+) -> DiscoveryResult:
     nodes: dict[str, Node] = {}
+    findings: list[Finding] = []
+    records: list[DiscoveryRecord] = []
+    tracked_paths = _tracked_paths(root)
 
     def add(node: Node) -> None:
         if node.id in nodes:
             raise ValueError(f"duplicate node id {node.id!r}: {node.path} vs {nodes[node.id].path}")
         nodes[node.id] = node
+
+    def include_candidate(node_id: str, path: Path) -> bool:
+        if tracked_paths is None:
+            return True
+        relative = path.relative_to(root).as_posix()
+        if relative in tracked_paths:
+            return True
+        records.append(DiscoveryRecord(node_id, relative, include_untracked))
+        if include_untracked:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "untracked-node-included",
+                    f"{node_id} ({relative}) is included provisionally; add it to Git before landing",
+                )
+            )
+            return True
+        findings.append(
+            Finding(
+                "WARN",
+                "untracked-node-excluded",
+                f"{relative} is untracked and excluded; rerun with --include-untracked to preview it",
+            )
+        )
+        return False
 
     # Root/managed docs first (so a spec/change node can never shadow them); persistence is read
     # from each header, so a missing header trips `missing-persistence` like any other node.
@@ -312,53 +416,105 @@ def discover_nodes(root: Path, settings: Settings) -> dict[str, Node]:
         root_paths.add(path.resolve())
         fm = parse_front_matter(path.read_text(encoding="utf-8")) or {}
         persistence = _as_str(fm.get("persistence"))
-        add(Node(nid, "global", path, persistence, None, None, [], [rel], None,
-                 self_hash=_as_str(fm.get("self_hash"))))
+        add(
+            Node(
+                nid,
+                "global",
+                path,
+                persistence,
+                None,
+                None,
+                [],
+                [rel],
+                None,
+                self_hash=_as_str(fm.get("self_hash")),
+            )
+        )
 
     # ADRs.
     for adr in sorted(_doc_path(root, "adr").glob("[0-9][0-9][0-9][0-9]-*.md")):
         m = re.match(r"(\d{4})-", adr.name)
         if not m:
             continue
+        node_id = f"adr-{m.group(1)}"
+        if not include_candidate(node_id, adr):
+            continue
         fm = parse_front_matter(adr.read_text(encoding="utf-8")) or {}
         status = (_as_str(fm.get("status")) or "").split()[0] or None
-        add(Node(f"adr-{m.group(1)}", "adr", adr, "frozen", status, None, [], [], None,
+        add(Node(node_id, "adr", adr, "frozen", status, None, [], [], None,
                  self_hash=_as_str(fm.get("self_hash"))))
 
     # spec/ reference + register (capabilities.md + README.md are root nodes → skip).
     for spec in sorted(_doc_path(root, "spec").glob("*.md")):
         if spec.resolve() in root_paths:
             continue
+        if not include_candidate(spec.stem, spec):
+            continue
         fm = parse_front_matter(spec.read_text(encoding="utf-8"))
-        add(_node_from_change_like(spec.stem, "spec", spec, fm or {}))
+        add(_node_from_change_like(root, spec.stem, "spec", spec, fm or {}))
 
     # change docs (active + archived) — only those carrying front-matter.
     for doc in sorted(_doc_path(root, "changes").rglob("*.md")):
-        fm = parse_front_matter(doc.read_text(encoding="utf-8"))
-        if fm is None:
+        text = doc.read_text(encoding="utf-8")
+        raw, _ = split_front_matter(text)
+        if raw is None:
             continue
+        relative = doc.relative_to(root).as_posix()
+        parse_before_filter = (
+            tracked_paths is None or relative in tracked_paths or include_untracked
+        )
+        fm = parse_front_matter(text) if parse_before_filter else None
+        provisional_id = (
+            _as_str(fm.get("id"))
+            if fm is not None
+            else doc.parent.name if doc.name in _GENERIC_DOCS else doc.stem
+        )
+        if not provisional_id:
+            raise ValueError(f"change doc has front-matter without an `id`: {doc}")
+        if not include_candidate(provisional_id, doc):
+            continue
+        if fm is None:
+            fm = parse_front_matter(text)
+            assert fm is not None
         nid = _as_str(fm.get("id"))
         if not nid:
             raise ValueError(f"change doc has front-matter without an `id`: {doc}")
-        add(_node_from_change_like(nid, "change", doc, fm))
+        add(_node_from_change_like(root, nid, "change", doc, fm))
 
     # docs/archive/ lineage — frozen by directory; node-ified so nothing frozen is unguarded.
     for arc in sorted(_doc_path(root, "archive").glob("*.md")):
+        if not include_candidate(f"archive-{arc.stem}", arc):
+            continue
         fm = parse_front_matter(arc.read_text(encoding="utf-8")) or {}
         nid = _as_str(fm.get("id")) or f"archive-{arc.stem}"
         add(Node(nid, "archive", arc, "frozen", None, None, [], [], None,
                  self_hash=_as_str(fm.get("self_hash"))))
 
-    return nodes
+    return DiscoveryResult(nodes, tuple(findings), tuple(records))
 
 
-def _node_from_change_like(nid: str, kind: str, path: Path, fm: Mapping[str, FMValue]) -> Node:
+def discover_nodes(
+    root: Path,
+    settings: Settings,
+    *,
+    include_untracked: bool = False,
+) -> dict[str, Node]:
+    return discover(root, settings, include_untracked=include_untracked).nodes
+
+
+def _node_from_change_like(
+    root: Path,
+    nid: str,
+    kind: str,
+    path: Path,
+    fm: Mapping[str, FMValue],
+) -> Node:
     fingerprints = _as_map(fm.get("fingerprints"))
     requires = _as_map(fm.get("requires_status"))
     edges = [
         Edge(t, fingerprints.get(t), requires.get(t)) for t in _as_list(fm.get("depends_on"))
     ]
-    persistence = _infer_persistence(path, _as_str(fm.get("persistence")))
+    persistence = _infer_persistence(root, path, _as_str(fm.get("persistence")))
     return Node(
         id=nid,
         kind=kind,
@@ -511,7 +667,17 @@ def validate(
                         f"but it is {target.status!r}",
                     )
                 )
-            if e.fingerprint is not None and n.active and target.path.exists():
+            state = hash_state(e.fingerprint)
+            if n.active and state in {HashState.EMPTY, HashState.PENDING, HashState.INVALID}:
+                findings.append(
+                    Finding(
+                        "ERROR",
+                        f"hash-{state.value}",
+                        f"{n.id} → {e.target}: fingerprint is {state.value}; "
+                        f"review the target and run `doc-contract stamp {n.id}`",
+                    )
+                )
+            if state == HashState.VALID and n.active and target.path.exists():
                 current = fingerprint(target.path.read_text(encoding="utf-8"))
                 if current != e.fingerprint:
                     findings.append(
@@ -525,7 +691,7 @@ def validate(
             # Fingerprint-by-default: every active edge to a doc target must be stamped. All
             # depend-on targets are docs (code targets aren't nodes, so can't be depended on) —
             # a missing fingerprint is therefore always possible-and-required here.
-            if n.active and e.fingerprint is None:
+            if n.active and state == HashState.ABSENT:
                 findings.append(
                     Finding(
                         "ERROR",
@@ -561,12 +727,22 @@ def validate(
     for n in sorted(nodes.values(), key=lambda x: x.id):
         if n.persistence != "frozen" or not n.path.exists():
             continue
-        if n.self_hash is None:
+        state = hash_state(n.self_hash)
+        if state == HashState.ABSENT:
             findings.append(
                 Finding(
                     "WARN",
                     "unstamped-frozen",
                     f"{n.id} ({n.path.name}) is frozen but records no self_hash",
+                )
+            )
+        elif state in {HashState.EMPTY, HashState.PENDING, HashState.INVALID}:
+            findings.append(
+                Finding(
+                    "ERROR",
+                    f"hash-{state.value}",
+                    f"{n.id} ({n.path.name}) self_hash is {state.value}; "
+                    f"review the frozen document and run `doc-contract stamp {n.id}`",
                 )
             )
         elif n.self_hash != fingerprint(n.path.read_text(encoding="utf-8")):
@@ -592,6 +768,22 @@ def validate(
                     "ERROR",
                     "no-roadmap-line",
                     f"active change {n.id} has no line in docs/roadmap.md",
+                )
+            )
+
+    # Entry preflight: declared ownership and test paths must resolve before a change can land.
+    # Proposed changes may name files that do not exist yet; keep that state visible as WARN.
+    for n in sorted(nodes.values(), key=lambda x: x.id):
+        if not n.active:
+            continue
+        for relative in sorted(set(n.files_owned)):
+            if (root / relative).exists():
+                continue
+            findings.append(
+                Finding(
+                    "WARN",
+                    "owned-file-missing",
+                    f"{n.id} declares missing owned path {relative}; create it or update files_owned",
                 )
             )
             continue
@@ -648,7 +840,12 @@ def validate(
     return findings
 
 
-def resolve(root: Path, settings: Settings) -> Resolution:
+def resolve(
+    root: Path,
+    settings: Settings,
+    *,
+    include_untracked: bool = False,
+) -> Resolution:
     root = root.resolve()
     boundary_findings: list[Finding] = []
     if not root.is_dir():
@@ -671,22 +868,40 @@ def resolve(root: Path, settings: Settings) -> Resolution:
                     f"required root node {node_id!r} is missing: {relative}",
                 )
             )
+    for node_id in sorted(settings.optional_root_ids):
+        relative = settings.root_nodes[node_id]
+        if not (root / relative).is_file():
+            boundary_findings.append(
+                Finding(
+                    "WARN",
+                    "optional-root-missing",
+                    f"optional root node {node_id!r} is not present: {relative}",
+                )
+            )
 
-    nodes = discover_nodes(root, settings)
+    discovery = discover(root, settings, include_untracked=include_untracked)
+    nodes = discovery.nodes
     if not nodes:
         boundary_findings.append(
             Finding("ERROR", "repo-root-mismatch", "target repository resolved zero nodes")
         )
     _compute_dependents(nodes)
     order, cycle = _topo_sort(nodes)
-    findings = boundary_findings + validate(root, nodes, cycle, settings)
+    findings = boundary_findings + list(discovery.findings) + validate(
+        root, nodes, cycle, settings
+    )
     findings.extend(
         Finding("ERROR", "secret-detected", format_finding(secret))
         for secret in scan_tree(
             root, secret_env_names=settings.additional_environment_names
         )
     )
-    return Resolution(nodes=nodes, findings=findings, topo_order=order)
+    return Resolution(
+        nodes=nodes,
+        findings=findings,
+        topo_order=order,
+        discovery=discovery.records,
+    )
 
 
 # --------------------------------------------------------------------------- Mermaid
@@ -723,10 +938,15 @@ def render_block(res: Resolution) -> str:
     return f"{DAG_BEGIN}\n```mermaid\n{render_mermaid(res)}\n```\n{DAG_END}"
 
 
-def update_roadmap(root: Path, settings: Settings) -> bool:
+def update_roadmap(
+    root: Path,
+    settings: Settings,
+    *,
+    include_untracked: bool = False,
+) -> bool:
     """Rewrite (or, on first run, fail with guidance to insert) the generated DAG block in
     docs/roadmap.md. Returns True if the file changed."""
-    res = resolve(root, settings)
+    res = resolve(root, settings, include_untracked=include_untracked)
     block = render_block(res)
     path = _doc_path(root, "roadmap", settings)
     text = path.read_text(encoding="utf-8")

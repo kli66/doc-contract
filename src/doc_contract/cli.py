@@ -12,7 +12,7 @@ from typing import Sequence
 from . import __version__
 from .config import ConfigError, Settings, load_settings, resolve_repo_root
 from .landing import LandingError, LandingPlan, execute_landing
-from .resolver import Finding, resolve, stamp_node, update_roadmap
+from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap, warning_delta
 from .sync import sync_package
 
 COMMANDS = frozenset({"check", "update", "stamp", "sync", "land"})
@@ -41,13 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--offline", action="store_true", help="skip the configured capability subprocess"
     )
-    subparsers.add_parser("update", parents=[common], help="regenerate the roadmap DAG")
+    check.add_argument("--include-untracked", action="store_true")
+    update = subparsers.add_parser("update", parents=[common], help="regenerate the roadmap DAG")
+    update.add_argument("--include-untracked", action="store_true")
     stamp = subparsers.add_parser("stamp", parents=[common], help="refresh a node's hashes")
     stamp.add_argument("node_id")
     subparsers.add_parser("sync", parents=[common], help="vendor this pinned package")
     land = subparsers.add_parser("land", parents=[common], help="transactionally archive a change")
     land.add_argument("change_ref", help="change ID or repository-relative change folder")
     land.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+    land.add_argument("--include-untracked", action="store_true")
     return parser
 
 
@@ -61,6 +64,15 @@ def _context(args: argparse.Namespace) -> Context:
 def _print_findings(findings: Sequence[Finding]) -> None:
     for finding in findings:
         print(f"{finding.level}: [{finding.code}] {finding.message}")
+
+
+def _print_discovery_preview(result: Resolution) -> None:
+    included = [record for record in result.discovery if record.included]
+    if not included:
+        return
+    print("untracked discovery preview (no mutation yet):")
+    for record in included:
+        print(f"  + {record.node_id}: {record.path}")
 
 
 def _capability_status(settings: Settings, *, offline: bool) -> tuple[str, Finding | None]:
@@ -97,30 +109,39 @@ def _capability_status(settings: Settings, *, offline: bool) -> tuple[str, Findi
     return "live passed", None
 
 
-def _check(context: Context, *, offline: bool) -> int:
-    result = resolve(context.root, context.settings)
+def _check(context: Context, *, offline: bool, include_untracked: bool) -> int:
+    result = resolve(context.root, context.settings, include_untracked=include_untracked)
+    _print_discovery_preview(result)
     live_status, live_finding = _capability_status(context.settings, offline=offline)
     findings = list(result.findings)
     if live_finding is not None:
         findings.append(live_finding)
-    _print_findings(findings)
+    _print_findings([finding for finding in findings if finding.level == "ERROR"])
     errors = [finding for finding in findings if finding.level == "ERROR"]
-    warnings = [finding for finding in findings if finding.level == "WARN"]
+    report = warning_delta(result.warnings, result.warnings)
+    for finding in report.baseline:
+        print(f"WARN BASELINE: [{finding.code}] {finding.message}")
     offline_status = "offline verified" if not result.errors else "offline failed"
     print(
         f"{offline_status}; {live_status}; {len(errors)} error(s), "
-        f"{len(warnings)} warning(s); {len(result.nodes)} nodes"
+        f"{len(report.baseline)} baseline warning(s), 0 new warning(s); "
+        f"{len(result.nodes)} nodes"
     )
     return 1 if errors else 0
 
 
-def _update(context: Context) -> int:
-    result = resolve(context.root, context.settings)
+def _update(context: Context, *, include_untracked: bool) -> int:
+    result = resolve(context.root, context.settings, include_untracked=include_untracked)
+    _print_discovery_preview(result)
+    for finding in result.warnings:
+        print(f"WARN BASELINE: [{finding.code}] {finding.message}")
     if result.errors:
         _print_findings(result.errors)
         print("roadmap not updated because validation failed")
         return 1
-    changed = update_roadmap(context.root, context.settings)
+    changed = update_roadmap(
+        context.root, context.settings, include_untracked=include_untracked
+    )
     print("roadmap updated" if changed else "roadmap already current")
     return 0
 
@@ -142,6 +163,10 @@ def _sync(context: Context) -> int:
 
 
 def _print_plan(plan: LandingPlan) -> None:
+    if plan.provisional_nodes:
+        print("untracked discovery preview (no mutation yet):")
+        for node_id, path in plan.provisional_nodes:
+            print(f"  + {node_id}: {path}")
     print(
         f"land plan: {plan.change_id}; {plan.source} -> {plan.archive}; "
         f"tracking={plan.tracking}; {len(plan.mutations)} mutation(s)"
@@ -150,13 +175,20 @@ def _print_plan(plan: LandingPlan) -> None:
     print(plan.diff, end="" if plan.diff.endswith("\n") else "\n")
 
 
-def _land(context: Context, change_ref: str, *, dry_run: bool) -> int:
+def _land(
+    context: Context,
+    change_ref: str,
+    *,
+    dry_run: bool,
+    include_untracked: bool,
+) -> int:
     try:
         outcome = execute_landing(
             context.root,
             context.settings,
             change_ref,
             dry_run=dry_run,
+            include_untracked=include_untracked,
             on_plan=_print_plan,
         )
     except LandingError as exc:
@@ -168,8 +200,18 @@ def _land(context: Context, change_ref: str, *, dry_run: bool) -> int:
     if dry_run:
         print("dry-run; no mutations")
         return 0
-    for finding in outcome.final_findings:
-        print(f"{finding.level}: [{finding.code}] {finding.message}")
+    _print_findings(
+        [finding for finding in outcome.final_findings if finding.level == "ERROR"]
+    )
+    for finding in outcome.warning_report.baseline:
+        print(f"WARN BASELINE: [{finding.code}] {finding.message}")
+    for finding in outcome.warning_report.introduced:
+        print(f"WARN NEW: [{finding.code}] {finding.message}")
+    print(
+        f"warnings: {len(outcome.warning_report.baseline)} baseline, "
+        f"{len(outcome.warning_report.introduced)} new, "
+        f"{len(outcome.warning_report.resolved)} resolved"
+    )
     if any(finding.level == "ERROR" for finding in outcome.final_findings):
         print("landing applied but final validation failed; journal retained", file=sys.stderr)
         return 1
@@ -185,15 +227,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"ERROR: [{exc.code}] {exc.path}: {exc.detail}", file=sys.stderr)
         return 2
     if args.command == "check":
-        return _check(context, offline=args.offline)
+        return _check(
+            context,
+            offline=args.offline,
+            include_untracked=args.include_untracked,
+        )
     if args.command == "update":
-        return _update(context)
+        return _update(context, include_untracked=args.include_untracked)
     if args.command == "stamp":
         return _stamp(context, args.node_id)
     if args.command == "sync":
         return _sync(context)
     if args.command == "land":
-        return _land(context, args.change_ref, dry_run=args.dry_run)
+        return _land(
+            context,
+            args.change_ref,
+            dry_run=args.dry_run,
+            include_untracked=args.include_untracked,
+        )
     raise AssertionError(args.command)
 
 

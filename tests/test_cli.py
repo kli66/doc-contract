@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def _write(root: Path, relative: str, content: str) -> Path:
 def _config(
     *,
     roots: dict[str, str] | None = None,
-    required_roots: tuple[str, ...] = (),
+    optional_roots: tuple[str, ...] = (),
     capability_mode: str = "skip",
     capability_command: tuple[str, ...] = (),
 ) -> str:
@@ -31,8 +32,8 @@ def _config(
         "schema_version = 1",
         'repo_name = "fixture"',
         'roadmap = "docs/roadmap.md"',
-        "required_roots = ["
-        + ", ".join(json.dumps(item) for item in required_roots)
+        "optional_roots = ["
+        + ", ".join(json.dumps(item) for item in optional_roots)
         + "]",
         "",
         "[root_nodes]",
@@ -50,12 +51,12 @@ def _repo(
     root: Path,
     *,
     roots: dict[str, str] | None = None,
-    required_roots: tuple[str, ...] = (),
+    optional_roots: tuple[str, ...] = (),
 ) -> Path:
     _write(
         root,
         ".doc-contract.toml",
-        _config(roots=roots, required_roots=required_roots),
+        _config(roots=roots, optional_roots=optional_roots),
     )
     _write(root, "docs/roadmap.md", "---\npersistence: living\n---\n# Roadmap\n")
     return root
@@ -100,10 +101,40 @@ def test_missing_required_root_is_reported(
     repo = _repo(
         tmp_path / "repo",
         roots={"roadmap": "docs/roadmap.md", "contract": "AGENTS.md"},
-        required_roots=("contract",),
     )
     assert main(["check", "--repo-root", str(repo), "--offline"]) == 1
     assert "required-root-missing" in capsys.readouterr().out
+
+
+def test_explicit_optional_root_is_reported_without_failing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(
+        tmp_path / "repo",
+        roots={"roadmap": "docs/roadmap.md", "contract": "AGENTS.md"},
+        optional_roots=("contract",),
+    )
+    assert main(["check", "--repo-root", str(repo), "--offline"]) == 0
+    assert "optional-root-missing" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "schema_version = 1\nrepo_name = 'x'\nrequired_roots = []\n[root_nodes]\n",
+        "schema_version = 1\nrepo_name = 'x'\noptional_roots = ['roadmap']\n"
+        "[root_nodes]\nroadmap = 'docs/roadmap.md'\n",
+        "schema_version = 1\nrepo_name = 'x'\n[root_nodes]\n"
+        "one = 'docs/roadmap.md'\ntwo = 'docs/roadmap.md'\n",
+    ],
+)
+def test_ambiguous_root_policy_is_rejected(
+    config: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "repo"
+    _write(root, ".doc-contract.toml", config)
+    assert main(["check", "--repo-root", str(root)]) == 2
+    assert "config-invalid" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -184,6 +215,40 @@ def test_update_rewrites_existing_marker_deterministically(
     capsys.readouterr()
     assert main(["update", "--repo-root", str(repo)]) == 0
     assert "already current" in capsys.readouterr().out
+
+
+def test_update_previews_untracked_nodes_before_mutation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path / "repo")
+    roadmap = repo / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + "\n- `docs/changes/provisional/` (proposed)\n\n"
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n<!-- END GENERATED DAG -->\n",
+        encoding="utf-8",
+    )
+    _write(
+        repo,
+        "docs/changes/provisional/change.md",
+        "---\nid: provisional\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# Provisional\n",
+    )
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", ".doc-contract.toml", "docs/roadmap.md"],
+        check=True,
+    )
+
+    assert main(["update", "--repo-root", str(repo)]) == 0
+    assert "untracked-node-excluded" in capsys.readouterr().out
+    assert "provisional (proposed)" not in roadmap.read_text(encoding="utf-8")
+
+    assert main(["update", "--repo-root", str(repo), "--include-untracked"]) == 0
+    output = capsys.readouterr().out
+    assert output.index("untracked discovery preview") < output.index("roadmap updated")
+    assert "provisional (proposed)" in roadmap.read_text(encoding="utf-8")
 
 
 def test_stamp_refreshes_active_dependency_fingerprint(

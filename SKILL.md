@@ -70,7 +70,7 @@ target repository. `scripts/config.py` remains only for legacy vendored tests an
 | `repo_name` | cosmetic repository label |
 | `roadmap` | repo-relative roadmap path; always required |
 | `root_nodes` | managed docs outside changes/adr/spec that must self-classify |
-| `required_roots` | root-node IDs whose files must exist |
+| `optional_roots` | explicit exceptions to required-by-default root nodes |
 | `capability` | skipped, optional, or required subprocess boundary |
 | `secret_env_names` | additional credential environment names, never values |
 
@@ -82,10 +82,13 @@ uv run pytest -q
 
 # resolve + report findings from any cwd (0 exit iff no ERROR)
 doc-contract check --repo-root /path/to/repo --offline
+doc-contract check --repo-root /path/to/repo --offline --include-untracked
 
 # regenerate the roadmap's Mermaid DAG block in place
 doc-contract update --repo-root /path/to/repo
+doc-contract update --repo-root /path/to/repo --include-untracked
 doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run
+doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/<name> --repo-root /path/to/repo
 ```
 
@@ -96,9 +99,10 @@ The materialize procedure — turning a bare repo into one under doc-contract:
 1. **Install or vendor the package.** Use `pip install /path/to/doc-contracts`, or run
    `doc-contract sync --repo-root /path/to/repo` to create the air-gapped vendor tree and pin
    manifest. Neither path assumes a `~/.claude` checkout.
-2. **Write `.doc-contract.toml`.** Declare `schema_version`, `repo_name`, `roadmap`, `root_nodes`,
-   and the subset of `required_roots`. Configure capability mode as `skip`, `optional`, or
-   `required`; non-skipped checks must be subprocess commands.
+2. **Write `.doc-contract.toml`.** Declare `schema_version`, `repo_name`, `roadmap`, and
+   `root_nodes`. Every root is required unless its ID appears in `optional_roots`; the roadmap is
+   always required. Configure capability mode as `skip`, `optional`, or `required`; non-skipped
+   checks must be subprocess commands.
 3. **Optionally retain the legacy pytest tripwires.** Repositories that vendor the compatibility
    `scripts/` tests can point their test configuration at those copies:
    ```toml

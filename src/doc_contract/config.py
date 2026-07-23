@@ -27,11 +27,15 @@ class Settings:
     repo_root: Path
     repo_name: str
     root_nodes: dict[str, str]
-    required_root_ids: tuple[str, ...] = ()
+    optional_root_ids: tuple[str, ...] = ()
     roadmap: str = "docs/roadmap.md"
     capability_mode: str = "skip"
     capability_command: tuple[str, ...] = ()
     additional_environment_names: tuple[str, ...] = ()
+
+    @property
+    def required_root_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(set(self.root_nodes) - set(self.optional_root_ids)))
 
 
 def _relative_path(value: object, *, key: str, config_path: Path) -> str:
@@ -84,14 +88,26 @@ def load_settings(repo_root: Path, config_path: Path | None = None) -> Settings:
         root_nodes[node_id] = _relative_path(
             relative, key=f"root_nodes.{node_id}", config_path=path
         )
-    required_root_ids = _string_list(
-        raw.get("required_roots"), key="required_roots", config_path=path
-    )
-    unknown_required = sorted(set(required_root_ids) - set(root_nodes))
-    if unknown_required:
+    if "required_roots" in raw:
         raise ConfigError(
-            "config-invalid", path, "required_roots contains an unknown root node id"
+            "config-invalid",
+            path,
+            "required_roots is obsolete; roots are required by default, use optional_roots",
         )
+    optional_root_ids = _string_list(
+        raw.get("optional_roots"), key="optional_roots", config_path=path
+    )
+    unknown_optional = sorted(set(optional_root_ids) - set(root_nodes))
+    if unknown_optional:
+        raise ConfigError(
+            "config-invalid", path, "optional_roots contains an unknown root node id"
+        )
+    if len(set(root_nodes.values())) != len(root_nodes):
+        raise ConfigError(
+            "config-invalid", path, "root_nodes must not assign one path to multiple ids"
+        )
+    if any(root_nodes[node_id] == roadmap for node_id in optional_root_ids):
+        raise ConfigError("config-invalid", path, "the roadmap root cannot be optional")
 
     capability = raw.get("capability", {})
     if not isinstance(capability, dict):
@@ -110,7 +126,7 @@ def load_settings(repo_root: Path, config_path: Path | None = None) -> Settings:
         repo_root=root,
         repo_name=repo_name,
         root_nodes=root_nodes,
-        required_root_ids=required_root_ids,
+        optional_root_ids=optional_root_ids,
         roadmap=roadmap,
         capability_mode=mode,
         capability_command=command,

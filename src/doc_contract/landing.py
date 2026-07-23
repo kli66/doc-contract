@@ -32,10 +32,12 @@ from .resolver import (
     resolve,
     split_front_matter,
     validate,
+    WarningDelta,
+    warning_delta,
 )
 
 TrackingMode = Literal["tracked", "untracked"]
-JOURNAL_SCHEMA = 1
+JOURNAL_SCHEMA = 2
 
 
 class LandingError(RuntimeError):
@@ -96,6 +98,8 @@ class LandingPlan:
     input_tree_hash: str
     output_tree_hash: str
     journal_path: str
+    provisional_nodes: tuple[tuple[str, str], ...] = ()
+    baseline_warnings: tuple[Finding, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -108,6 +112,11 @@ class LandingPlan:
             "input_tree_hash": self.input_tree_hash,
             "output_tree_hash": self.output_tree_hash,
             "journal_path": self.journal_path,
+            "provisional_nodes": [list(item) for item in self.provisional_nodes],
+            "baseline_warnings": [
+                {"level": finding.level, "code": finding.code, "message": finding.message}
+                for finding in self.baseline_warnings
+            ],
             "mutations": [mutation.as_dict() for mutation in self.mutations],
         }
 
@@ -123,6 +132,23 @@ class LandingPlan:
             raise LandingError("journal-invalid: mutations must be a list")
         if not all(isinstance(item, dict) for item in mutations):
             raise LandingError("journal-invalid: mutation entries must be objects")
+        provisional = raw.get("provisional_nodes", [])
+        if not isinstance(provisional, list) or not all(
+            isinstance(item, list)
+            and len(item) == 2
+            and all(isinstance(value, str) for value in item)
+            for item in provisional
+        ):
+            raise LandingError("journal-invalid: provisional_nodes is malformed")
+        warning_items = raw.get("baseline_warnings", [])
+        if not isinstance(warning_items, list) or not all(
+            isinstance(item, dict)
+            and item.get("level") == "WARN"
+            and isinstance(item.get("code"), str)
+            and isinstance(item.get("message"), str)
+            for item in warning_items
+        ):
+            raise LandingError("journal-invalid: baseline_warnings is malformed")
         return cls(
             change_id=_required_str(raw, "change_id"),
             source=_required_str(raw, "source"),
@@ -134,6 +160,11 @@ class LandingPlan:
             input_tree_hash=_required_str(raw, "input_tree_hash"),
             output_tree_hash=_required_str(raw, "output_tree_hash"),
             journal_path=_required_str(raw, "journal_path"),
+            provisional_nodes=tuple((item[0], item[1]) for item in provisional),
+            baseline_warnings=tuple(
+                Finding("WARN", item["code"], item["message"])
+                for item in warning_items
+            ),
         )
 
 
@@ -143,6 +174,7 @@ class LandingOutcome:
     already_landed: bool
     final_findings: tuple[Finding, ...] = ()
     capability_status: str = "not-run"
+    warning_report: WarningDelta = WarningDelta((), (), ())
 
 
 def _required_str(raw: dict[str, object], key: str) -> str:
@@ -358,13 +390,23 @@ def plan_landing(
     ref: str,
     *,
     date: str | None = None,
+    include_untracked: bool = False,
 ) -> LandingPlan:
     root = root.resolve()
-    result = resolve(root, settings)
+    result = resolve(root, settings, include_untracked=include_untracked)
     if result.errors:
         raise LandingError("preflight-invalid: repository has resolver errors")
     if len(result.topo_order) != len(result.nodes):
         raise LandingError("preflight-invalid: dependency graph contains a cycle")
+    requested = Path(ref).name
+    if not include_untracked and any(
+        not record.included
+        and (record.node_id == requested or requested in Path(record.path).parts)
+        for record in result.discovery
+    ):
+        raise LandingError(
+            "untracked-change-excluded: rerun with --include-untracked to preview it"
+        )
     change_id, source = _locate_source(root, ref, result.nodes)
     source_rel = source.relative_to(root).as_posix()
     day = date or _datetime.date.today().isoformat()
@@ -446,6 +488,10 @@ def plan_landing(
         input_tree_hash=before_tree,
         output_tree_hash=after_tree,
         journal_path=journal_path.as_posix(),
+        provisional_nodes=tuple(
+            (record.node_id, record.path) for record in result.discovery if record.included
+        ),
+        baseline_warnings=tuple(result.warnings),
     )
 
 
@@ -456,18 +502,23 @@ def _journal_payload(plan: LandingPlan, completed: list[int]) -> dict[str, objec
 
 
 def _save_journal(path: Path, plan: LandingPlan, completed: list[int]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(_journal_payload(plan, completed), indent=2, sort_keys=True) + "\n").encode()
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = (
+            json.dumps(_journal_payload(plan, completed), indent=2, sort_keys=True) + "\n"
+        ).encode()
+        fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, path)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+    except OSError as exc:
+        raise LandingError(f"journal-unavailable: {type(exc).__name__}") from None
 
 
 def _load_journal(path: Path) -> tuple[LandingPlan, list[int]]:
@@ -587,12 +638,13 @@ def execute_landing(
     ref: str,
     *,
     dry_run: bool = False,
+    include_untracked: bool = False,
     date: str | None = None,
     fault_after: int | None = None,
     on_plan: Callable[[LandingPlan], None] | None = None,
 ) -> LandingOutcome:
     root = root.resolve()
-    result = resolve(root, settings)
+    result = resolve(root, settings, include_untracked=include_untracked)
     active_id: str | None = None
     if Path(ref).parts and Path(ref).parts[0] == "docs":
         active_id = Path(ref).name
@@ -604,12 +656,20 @@ def execute_landing(
     else:
         if active_id and _find_completed(root, active_id):
             return LandingOutcome(None, True)
-        plan = plan_landing(root, settings, ref, date=date)
+        plan = plan_landing(
+            root,
+            settings,
+            ref,
+            date=date,
+            include_untracked=include_untracked,
+        )
         completed = []
     if on_plan is not None:
         on_plan(plan)
     if dry_run:
         return LandingOutcome(plan, False)
+    if not journal_path.is_file():
+        _save_journal(journal_path, plan, completed)
     for index, mutation in enumerate(plan.mutations):
         if index in completed:
             continue
@@ -619,12 +679,13 @@ def execute_landing(
         _save_journal(journal_path, plan, completed)
         if fault_after is not None and len(completed) >= fault_after:
             raise InjectedInterruption("injected-interruption")
-    final = resolve(root, settings)
+    final = resolve(root, settings, include_untracked=include_untracked)
     capability_status, capability_finding = _capability(settings)
     findings = list(final.findings)
     if capability_finding is not None:
         findings.append(capability_finding)
+    report = warning_delta(plan.baseline_warnings, findings)
     if any(finding.level == "ERROR" for finding in findings):
-        return LandingOutcome(plan, False, tuple(findings), capability_status)
+        return LandingOutcome(plan, False, tuple(findings), capability_status, report)
     journal_path.unlink(missing_ok=True)
-    return LandingOutcome(plan, False, tuple(findings), capability_status)
+    return LandingOutcome(plan, False, tuple(findings), capability_status, report)

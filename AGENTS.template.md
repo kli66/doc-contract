@@ -42,8 +42,10 @@ docs/
 **Every managed doc carries a `persistence:` header and is a node in the change-DAG resolver** — so
 none sits unclassified (`missing-persistence` is an ERROR). That includes the top-level docs above
 (`CONTEXT.md`, `AGENTS.md`, `CLAUDE.md`, `docs/roadmap.md`, `docs/spec/{capabilities,README}.md`) and
-any other managed doc — enumerate them in `config.ROOT_NODES`. `docs/archive/` lineage is node-ified
-too (frozen, `self_hash`-guarded), so no managed doc sits outside the node set.
+any other managed doc — enumerate them in `.doc-contract.toml` `root_nodes`. Roots are required by
+default; only IDs explicitly listed in `optional_roots` may be absent, and their omission is still
+reported. `docs/archive/` lineage is node-ified too (frozen, `self_hash`-guarded), so no managed doc
+sits outside the node set.
 
 ## What makes this cheap
 
@@ -105,6 +107,8 @@ the durable home for open work; ADRs + `docs/roadmap.md` are the source of truth
    — do the task IDs, decisions, file paths, and status claims still match?
 2. If material drift has occurred, reconcile it (update the affected ADRs + roadmap first) so you
    start from an accurate map. If a change's detail *contradicts* an ADR, **stop and surface it**.
+3. Resolve the change with `--include-untracked` when it is still provisional. The preflight reports
+   missing `files_owned` paths, untracked nodes, and dependency/hash drift before implementation.
 
 **On exit, before handing off or finishing:**
 1. Update the ADRs + `docs/roadmap.md` to reflect task completion status.
@@ -122,9 +126,10 @@ hand-kept source. Enforced by the `test_change_dag.py` tripwire. The roadmap pro
 **Hashing policy (fingerprint-by-default + frozen `self_hash`).** Two content hashes, both over the
 *canonical body* (front-matter stripped). (1) **Edge fingerprints:** every `depends_on` edge whose
 target is a doc carries that target's content hash at review time — the **default, not opt-in**. A
-*missing* fingerprint on an active doc-edge is an **ERROR**; a *stale* one (target moved) is a
+*missing*, empty, `PENDING`, or malformed fingerprint on an active doc-edge is an **ERROR**; a
+*stale* valid fingerprint (target moved) is a
 **WARN** (re-review, then re-stamp). (2) **`self_hash`:** every `frozen` doc stamps a hash of its own
-body; a body edit that doesn't re-stamp is an **ERROR** (append-only enforced). A fingerprint rides
+body; an empty, `PENDING`, malformed, or mismatched value is an **ERROR** (append-only enforced). A fingerprint rides
 the *depender*; a `self_hash` rides the *frozen target*.
 
 ## Executing a change → dispatch is one line
@@ -137,8 +142,10 @@ contradicts the ADRs / roadmap / code.
 
 Because `CLAUDE.md` imports this file, all of the above is already in every agent's context.
 **Dispatch therefore collapses to one line: "Execute `docs/changes/<name>/`."** Landing is completed
-through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`;
-the transaction owns the status, roadmap, fingerprint, journal, and archive boundaries.
+through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`.
+Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
+before mutation and labels baseline warnings separately from new regressions. The transaction owns
+the status, roadmap, fingerprint, journal, and archive boundaries.
 
 <!-- Repo-specific traps (the {{PROJECT}} invariants that are easy to violate) go in CLAUDE.md, not
      here. Keep this file the portable contract; keep CLAUDE.md the thin @AGENTS.md pointer + traps. -->

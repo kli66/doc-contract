@@ -36,7 +36,7 @@ Create `.doc-contract.toml` at the repository root:
 schema_version = 1
 repo_name = "example"
 roadmap = "docs/roadmap.md"
-required_roots = ["roadmap"]
+optional_roots = ["capabilities"]
 
 [root_nodes]
 roadmap = "docs/roadmap.md"
@@ -47,8 +47,9 @@ mode = "skip"
 ```
 
 `root_nodes` classifies managed documents outside the normal change, ADR, and spec discovery tree.
-Only IDs listed by `required_roots` are mandatory. The roadmap itself is always mandatory. Paths
-must be relative and remain inside the selected repository.
+Every declared root is required by default. `optional_roots` is the explicit exception list; the
+roadmap cannot be optional. Missing required roots are errors, while optional omissions remain
+visible as warnings. Paths must be unique, relative, and remain inside the selected repository.
 
 Repository selection precedence is explicit: `--repo-root`, then the parent of `--config`, then the
 current Git root. Missing config, a missing roadmap, a missing required root, and zero discovered
@@ -69,18 +70,25 @@ The summary reports `offline verified`, `live skipped`, `live passed`, or a fail
 
 ```console
 doc-contract check --repo-root /path/to/repo --offline
+doc-contract check --repo-root /path/to/repo --offline --include-untracked
 doc-contract update --repo-root /path/to/repo
+doc-contract update --repo-root /path/to/repo --include-untracked
 doc-contract stamp CHANGE_ID --repo-root /path/to/repo
 doc-contract sync --repo-root /path/to/repo
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run
+doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/example --repo-root /path/to/repo
 ```
 
-`check` is read-only. `update` rewrites only the generated roadmap block after validation. `stamp`
-refreshes reviewed hashes in one node. `sync` updates the vendored package and pin manifest. `land`
-previews and then atomically applies the status, dependent fingerprints, roadmap, and archive move;
-rerunning a completed landing returns success without changing files or the Git index. Interrupted
-landings resume from the journal under Git metadata, and concurrent edits fail closed.
+Discovery includes Git-tracked documents plus declared roots by default. `--include-untracked`
+previews provisional node IDs and paths before `update` or `land` mutates anything; without it,
+untracked candidates are reported and excluded. `check` is read-only and labels tolerated baseline
+warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap
+block after validation. `stamp` refreshes reviewed hashes in one node; empty, `PENDING`, and malformed
+hashes are actionable errors. `sync` updates the vendored package and pin manifest. `land` previews
+and then atomically applies the status, dependent fingerprints, roadmap, and archive move; rerunning
+a completed landing returns success without changing files or the Git index. Interrupted landings
+resume from the journal under Git metadata, and concurrent edits fail closed.
 
 Legacy `PYTHONPATH=scripts python -m dag` and flat `secret_scan` imports remain compatibility paths;
 new automation should use the installed command and `.doc-contract.toml`.
