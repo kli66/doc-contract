@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import datetime as _datetime
 import difflib
 import hashlib
@@ -11,7 +10,7 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -20,18 +19,9 @@ from .resolver import (
     DAG_BEGIN_PREFIX,
     DAG_END,
     Finding,
-    Resolution,
-    _as_map,
-    _as_str,
-    _compute_dependents,
-    _render_front_matter,
-    _topo_sort,
-    fingerprint,
     parse_front_matter,
-    render_block,
+    project_landing,
     resolve,
-    split_front_matter,
-    validate,
     WarningDelta,
     warning_delta,
 )
@@ -277,7 +267,8 @@ def _locate_source(root: Path, ref: str, nodes: dict[str, object]) -> tuple[str,
         docs = sorted(path.glob("*.md"))
         for doc in docs:
             fm = parse_front_matter(doc.read_text(encoding="utf-8")) or {}
-            change_id = _as_str(fm.get("id"))
+            raw_change_id = fm.get("id")
+            change_id = raw_change_id if isinstance(raw_change_id, str) else None
             node = nodes.get(change_id) if change_id else None
             if change_id and node is not None and getattr(node, "active", False):
                 return change_id, path
@@ -288,38 +279,7 @@ def _locate_source(root: Path, ref: str, nodes: dict[str, object]) -> tuple[str,
     return ref, getattr(node, "path").parent
 
 
-def _land_change_text(text: str, date: str, archive: str) -> str:
-    values = parse_front_matter(text)
-    if values is None:
-        raise LandingError("change-invalid: missing front matter")
-    values["status"] = "landed"
-    values["landed_at"] = date
-    values["archive_path"] = archive
-    _, body = split_front_matter(text)
-    body = re.sub(r"^Status:.*$", f"Status: Landed · {date}", body, count=1, flags=re.MULTILINE)
-    return _render_front_matter(values, body)
-
-
-def _dependent_text(text: str, change_id: str, target_hash: str) -> str:
-    values = parse_front_matter(text)
-    if values is None:
-        raise LandingError("dependent-invalid: missing front matter")
-    fingerprints = _as_map(values.get("fingerprints"))
-    if fingerprints.get(change_id) == target_hash:
-        return text
-    fingerprints[change_id] = target_hash
-    values["fingerprints"] = fingerprints
-    _, body = split_front_matter(text)
-    return _render_front_matter(values, body)
-
-
-def _strip_generated(text: str) -> str:
-    if DAG_BEGIN_PREFIX in text and DAG_END in text:
-        return text[: text.index(DAG_BEGIN_PREFIX)] + text[text.index(DAG_END) + len(DAG_END) :]
-    return text
-
-
-def _roadmap_output(text: str, source: str, archive: str, block: str) -> str:
+def _roadmap_prose_output(text: str, source: str, archive: str) -> str:
     def replace_lines(segment: str) -> str:
         lines: list[str] = []
         for line in segment.splitlines(keepends=True):
@@ -334,9 +294,12 @@ def _roadmap_output(text: str, source: str, archive: str, block: str) -> str:
     if DAG_BEGIN_PREFIX in text and DAG_END in text:
         marker = text.index(DAG_BEGIN_PREFIX)
         prefix = replace_lines(text[:marker])
-        suffix = text[text.index(DAG_END) + len(DAG_END) :]
-        return prefix + block + suffix
+        return prefix + text[marker:]
     raise LandingError("roadmap-invalid: generated DAG markers are missing")
+
+
+def _roadmap_output(text: str, block: str) -> str:
+    return text[: text.index(DAG_BEGIN_PREFIX)] + block + text[text.index(DAG_END) + len(DAG_END) :]
 
 
 def _diff_for(path: str, before: str, after: str) -> str:
@@ -348,40 +311,6 @@ def _diff_for(path: str, before: str, after: str) -> str:
             tofile=path,
         )
     )
-
-
-def _simulate(
-    root: Path,
-    settings: Settings,
-    result: Resolution,
-    change_id: str,
-    archive_path: Path,
-    change_output: str,
-    roadmap_output: str,
-) -> Resolution:
-    nodes = copy.deepcopy(result.nodes)
-    for current in nodes.values():
-        current.dependents.clear()
-    node = nodes[change_id]
-    node.path = archive_path
-    node.status = "landed"
-    target_hash = fingerprint(change_output)
-    for dependent in nodes.values():
-        if dependent.active:
-            dependent.depends_on = [
-                replace(edge, fingerprint=target_hash) if edge.target == change_id else edge
-                for edge in dependent.depends_on
-            ]
-    _compute_dependents(nodes)
-    order, cycle = _topo_sort(nodes)
-    findings = validate(
-        root,
-        nodes,
-        cycle,
-        settings,
-        roadmap_override=_strip_generated(roadmap_output),
-    )
-    return Resolution(nodes=nodes, findings=findings, topo_order=order)
 
 
 def plan_landing(
@@ -421,42 +350,38 @@ def plan_landing(
     if not change_file.is_file():
         raise LandingError("change-invalid: change.md is missing")
     old_change = change_file.read_text(encoding="utf-8")
-    new_change = _land_change_text(old_change, day, archive_rel)
+    current_roadmap = (root / settings.roadmap).read_text(encoding="utf-8")
+    planned_roadmap = _roadmap_prose_output(current_roadmap, source_rel, archive_rel)
+    try:
+        projection = project_landing(
+            root,
+            settings,
+            result,
+            change_id=change_id,
+            archive_path=archive / "change.md",
+            archive_relative=archive_rel,
+            landed_at=day,
+            planned_roadmap_text=planned_roadmap,
+        )
+    except ValueError as exc:
+        raise LandingError(str(exc)) from None
+    new_change = projection.change_document.content
     change_hash_before = _file_hash(change_file)
     change_hash_after = _sha(new_change.encode("utf-8"))
     mutations: list[Mutation] = [
         Mutation("write", f"{source_rel}/change.md", None, change_hash_before, change_hash_after, new_change)
     ]
     diff_parts = [_diff_for(f"{source_rel}/change.md", old_change, new_change)]
-    target_hash = fingerprint(new_change)
-    for dependent in sorted(result.nodes.values(), key=lambda item: item.id):
-        if not dependent.active or not dependent.path.is_file():
-            continue
-        if not any(edge.target == change_id for edge in dependent.depends_on):
-            continue
-        old = dependent.path.read_text(encoding="utf-8")
-        new = _dependent_text(old, change_id, target_hash)
+    for document in projection.dependent_documents:
+        old = document.path.read_text(encoding="utf-8")
+        new = document.content
         if new == old:
             continue
-        relative = dependent.path.relative_to(root).as_posix()
-        mutations.append(Mutation("write", relative, None, _file_hash(dependent.path), _sha(new.encode()), new))
+        relative = document.path.relative_to(root).as_posix()
+        mutations.append(Mutation("write", relative, None, _file_hash(document.path), _sha(new.encode()), new))
         diff_parts.append(_diff_for(relative, old, new))
 
-    current_roadmap = (root / settings.roadmap).read_text(encoding="utf-8")
-    simulated = copy.deepcopy(result)
-    simulated.nodes[change_id].status = "landed"
-    simulated.nodes[change_id].path = archive
-    for current in simulated.nodes.values():
-        current.dependents.clear()
-    for dependent in simulated.nodes.values():
-        if dependent.active:
-            dependent.depends_on = [
-                replace(edge, fingerprint=target_hash) if edge.target == change_id else edge
-                for edge in dependent.depends_on
-            ]
-    _compute_dependents(simulated.nodes)
-    simulated.topo_order, _ = _topo_sort(simulated.nodes)
-    roadmap_new = _roadmap_output(current_roadmap, source_rel, archive_rel, render_block(simulated))
+    roadmap_new = _roadmap_output(planned_roadmap, projection.roadmap_block)
     roadmap_path = root / settings.roadmap
     mutations.append(
         Mutation(
@@ -469,8 +394,7 @@ def plan_landing(
         )
     )
     diff_parts.append(_diff_for(settings.roadmap, current_roadmap, roadmap_new))
-    final = _simulate(root, settings, result, change_id, archive, new_change, roadmap_new)
-    if final.errors:
+    if projection.resolution.errors:
         raise LandingError("preflight-invalid: planned repository state fails validation")
     before_tree = _tree_hash(source)
     after_tree = _tree_hash_with(source, {"change.md": new_change.encode("utf-8")})
@@ -614,15 +538,19 @@ def _find_completed(root: Path, change_id: str) -> bool:
             values = parse_front_matter(change.read_text(encoding="utf-8")) or {}
         except (OSError, ValueError):
             continue
-        matches_id = _as_str(values.get("id")) == change_id
+        recorded_id = values.get("id")
+        matches_id = isinstance(recorded_id, str) and recorded_id == change_id
         matches_folder = folder.name.endswith(f"-{change_id}")
-        recorded_archive = _as_str(values.get("archive_path"))
+        raw_archive = values.get("archive_path")
+        recorded_archive = raw_archive if isinstance(raw_archive, str) else None
         actual_archive = folder.relative_to(root).as_posix()
         metadata_matches = recorded_archive is None or recorded_archive == actual_archive
+        status = values.get("status")
         if (
             (matches_id or matches_folder)
             and metadata_matches
-            and _as_str(values.get("status")) == "landed"
+            and isinstance(status, str)
+            and status == "landed"
         ):
             return True
     return False

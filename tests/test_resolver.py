@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
+import copy
+from dataclasses import FrozenInstanceError
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from doc_contract.config import Settings
-from doc_contract.resolver import Finding, fingerprint, resolve, warning_delta
+from doc_contract.resolver import (
+    Edge,
+    Finding,
+    Node,
+    Resolution,
+    fingerprint,
+    project_landing,
+    render_block,
+    resolve,
+    warning_delta,
+)
 
 
 def _write(root: Path, relative: str, content: str) -> Path:
@@ -230,3 +242,251 @@ def test_warning_delta_tracks_same_untracked_node_across_archive_path() -> None:
     assert report.baseline == tuple(after)
     assert not report.introduced
     assert not report.resolved
+
+
+def test_landing_projection_owns_rewrites_graph_and_validation(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    source_path = _write(
+        root,
+        "docs/changes/source/change.md",
+        "---\nid: source\npersistence: ephemeral\nstatus: proposed\ntrack: test\n---\n"
+        "# Source\n\nStatus: Proposed (not accepted) · Proposed 2026-07-24\n",
+    )
+    active_path = _write(
+        root,
+        "docs/changes/active/change.md",
+        "---\nid: active\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "depends_on:\n  - source\n---\n# Active\n",
+    )
+    inactive_path = _write(
+        root,
+        "docs/changes/inactive/change.md",
+        "---\nid: inactive\npersistence: ephemeral\nstatus: landed\ntrack: test\n"
+        "depends_on:\n  - source\n---\n# Inactive\n",
+    )
+    nodes = {
+        "source": Node(
+            "source", "change", source_path, "ephemeral", "proposed", "test", [], [], None
+        ),
+        "active": Node(
+            "active",
+            "change",
+            active_path,
+            "ephemeral",
+            "proposed",
+            "test",
+            [Edge("source")],
+            [],
+            None,
+        ),
+        "inactive": Node(
+            "inactive",
+            "change",
+            inactive_path,
+            "ephemeral",
+            "landed",
+            "test",
+            [Edge("source")],
+            [],
+            None,
+        ),
+    }
+    resolution = Resolution(nodes, [], ["source", "active", "inactive"])
+    original = copy.deepcopy(resolution)
+    archive = root / "docs/changes/archive/2026-07-24-source/change.md"
+    roadmap = (
+        "- `docs/changes/archive/2026-07-24-source/` (landed)\n"
+        "- `docs/changes/active/` (proposed)\n"
+    )
+
+    projection = project_landing(
+        root,
+        _settings(root),
+        resolution,
+        change_id="source",
+        archive_path=archive,
+        archive_relative="docs/changes/archive/2026-07-24-source",
+        landed_at="2026-07-24",
+        planned_roadmap_text=roadmap,
+    )
+
+    projected = projection.resolution
+    landed_hash = fingerprint(projection.change_document.content)
+    assert projection.change_document.path == archive
+    assert "status: landed" in projection.change_document.content
+    assert "Status: Landed · 2026-07-24" in projection.change_document.content
+    assert [document.path for document in projection.dependent_documents] == [active_path]
+    assert f"source: {landed_hash}" in projection.dependent_documents[0].content
+    assert projected.nodes["source"].path == archive
+    assert projected.nodes["source"].status == "landed"
+    assert projected.nodes["source"].dependents == ("active", "inactive")
+    assert projected.nodes["active"].depends_on[0].fingerprint == landed_hash
+    assert projected.nodes["inactive"].depends_on[0].fingerprint is None
+    assert projected.topo_order.index("source") < projected.topo_order.index("active")
+    assert 'source["source (landed)"]' in projection.roadmap_block
+    assert "source --> active" in projection.roadmap_block
+    assert not projected.errors
+    assert resolution == original
+    with pytest.raises(TypeError):
+        projected.nodes["new"] = projected.nodes["source"]  # type: ignore[index]
+    with pytest.raises(FrozenInstanceError):
+        projected.nodes["source"].status = "proposed"  # type: ignore[misc]
+
+
+def test_landing_projection_reports_unknown_and_cyclic_graph(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    source_path = _write(root, "docs/changes/source/change.md", _change("source"))
+    first_path = _write(
+        root,
+        "docs/changes/first/change.md",
+        "---\nid: first\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "depends_on:\n  - second\n  - missing\n  - source\n---\n# First\n",
+    )
+    second_path = _write(
+        root,
+        "docs/changes/second/change.md",
+        "---\nid: second\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "depends_on:\n  - first\n---\n# Second\n",
+    )
+    resolution = Resolution(
+        {
+            "source": Node(
+                "source", "change", source_path, "ephemeral", "proposed", "test", [], [], None
+            ),
+            "first": Node(
+                "first",
+                "change",
+                first_path,
+                "ephemeral",
+                "proposed",
+                "test",
+                [Edge("second"), Edge("missing"), Edge("source")],
+                [],
+                None,
+            ),
+            "second": Node(
+                "second",
+                "change",
+                second_path,
+                "ephemeral",
+                "proposed",
+                "test",
+                [Edge("first")],
+                [],
+                None,
+            ),
+        },
+        [],
+        [],
+    )
+    roadmap = (
+        "- `docs/changes/archive/2026-07-24-source/` (landed)\n"
+        "- `docs/changes/first/` (proposed)\n"
+        "- `docs/changes/second/` (proposed)\n"
+    )
+
+    projection = project_landing(
+        root,
+        _settings(root),
+        resolution,
+        change_id="source",
+        archive_path=root / "docs/changes/archive/2026-07-24-source/change.md",
+        archive_relative="docs/changes/archive/2026-07-24-source",
+        landed_at="2026-07-24",
+        planned_roadmap_text=roadmap,
+    )
+
+    assert {finding.code for finding in projection.findings} >= {"unknown-dependency", "cycle"}
+    assert projection.resolution.topo_order == ("source",)
+
+
+def test_landing_projection_matches_final_on_disk_resolution(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    roadmap_header = "---\npersistence: living\n---\n# Roadmap\n\n"
+    generated = (
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n<!-- END GENERATED DAG -->\n"
+    )
+    _write(
+        root,
+        "docs/roadmap.md",
+        roadmap_header
+        + "- `docs/changes/source/` (proposed)\n"
+        + "- `docs/changes/dependent/` (proposed)\n\n"
+        + generated,
+    )
+    source_path = _write(root, "docs/changes/source/change.md", _change("source"))
+    dependent_path = _write(
+        root,
+        "docs/changes/dependent/change.md",
+        "---\nid: dependent\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "depends_on:\n  - source\n---\n# Dependent\n",
+    )
+    settings = _settings(root)
+    resolution = resolve(root, settings)
+    original = copy.deepcopy(resolution)
+    archive = root / "docs/changes/archive/2026-07-24-source/change.md"
+    planned_roadmap = (
+        roadmap_header
+        + "- `docs/changes/archive/2026-07-24-source/` (landed)\n"
+        + "- `docs/changes/dependent/` (proposed)\n\n"
+        + generated
+    )
+
+    projection = project_landing(
+        root,
+        settings,
+        resolution,
+        change_id="source",
+        archive_path=archive,
+        archive_relative="docs/changes/archive/2026-07-24-source",
+        landed_at="2026-07-24",
+        planned_roadmap_text=planned_roadmap,
+    )
+
+    archive.parent.mkdir(parents=True)
+    archive.write_text(projection.change_document.content, encoding="utf-8")
+    source_path.unlink()
+    source_path.parent.rmdir()
+    dependent_path.write_text(projection.dependent_documents[0].content, encoding="utf-8")
+    (root / "docs/roadmap.md").write_text(
+        planned_roadmap[: planned_roadmap.index("<!-- BEGIN GENERATED DAG")]
+        + projection.roadmap_block
+        + "\n",
+        encoding="utf-8",
+    )
+    final = resolve(root, settings)
+
+    projected = projection.resolution
+    assert resolution == original
+    assert set(projected.nodes) == set(final.nodes)
+    for node_id, node in projected.nodes.items():
+        final_node = final.nodes[node_id]
+        assert (
+            node.id,
+            node.kind,
+            node.path,
+            node.persistence,
+            node.status,
+            node.track,
+            node.depends_on,
+            node.files_owned,
+            node.gated_on,
+            node.self_hash,
+            node.dependents,
+        ) == (
+            final_node.id,
+            final_node.kind,
+            final_node.path,
+            final_node.persistence,
+            final_node.status,
+            final_node.track,
+            tuple(final_node.depends_on),
+            tuple(final_node.files_owned),
+            final_node.gated_on,
+            final_node.self_hash,
+            tuple(final_node.dependents),
+        )
+    assert projected.findings == tuple(final.findings)
+    assert projected.topo_order == tuple(final.topo_order)
+    assert projection.roadmap_block == render_block(final)

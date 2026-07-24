@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import subprocess
 from pathlib import Path
 
@@ -256,3 +257,29 @@ def test_failed_final_validation_retains_journal(tmp_path: Path) -> None:
     )
     assert any(finding.code == "capability-check-failed" for finding in outcome.final_findings)
     assert list((root / ".git").glob("doc-contract/land-*.json"))
+
+
+def test_landing_imports_no_private_resolver_symbols() -> None:
+    source = Path("src/doc_contract/landing.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    resolver_imports = [
+        alias.name
+        for node in ast.walk(module)
+        if isinstance(node, ast.ImportFrom) and node.module == "resolver"
+        for alias in node.names
+    ]
+    projection_calls = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "project_landing"
+    ]
+    function_names = {
+        node.name for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert resolver_imports
+    assert not [name for name in resolver_imports if name.startswith("_")]
+    assert len(projection_calls) == 1
+    assert "_simulate" not in function_names

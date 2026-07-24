@@ -58,6 +58,7 @@ only; a `src/` symbol is never a v1 fingerprint target.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 import subprocess
@@ -66,6 +67,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 
 from .config import Settings
 from .secret_scan import format_finding, scan_tree
@@ -309,6 +311,59 @@ class WarningDelta:
     baseline: tuple[Finding, ...]
     introduced: tuple[Finding, ...]
     resolved: tuple[Finding, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedDocument:
+    path: Path
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedNode:
+    id: str
+    kind: str
+    path: Path
+    persistence: str | None
+    status: str | None
+    track: str | None
+    depends_on: tuple[Edge, ...]
+    files_owned: tuple[str, ...]
+    gated_on: str | None
+    self_hash: str | None
+    dependents: tuple[str, ...]
+
+    @property
+    def active(self) -> bool:
+        return self.kind == "change" and (self.status or "") in ACTIVE_STATUSES
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedResolution:
+    nodes: Mapping[str, ProjectedNode]
+    findings: tuple[Finding, ...]
+    topo_order: tuple[str, ...]
+    discovery: tuple["DiscoveryRecord", ...]
+
+    @property
+    def errors(self) -> tuple[Finding, ...]:
+        return tuple(finding for finding in self.findings if finding.level == "ERROR")
+
+    @property
+    def warnings(self) -> tuple[Finding, ...]:
+        return tuple(finding for finding in self.findings if finding.level == "WARN")
+
+
+@dataclass(frozen=True, slots=True)
+class LandingProjection:
+    change_document: ProjectedDocument
+    dependent_documents: tuple[ProjectedDocument, ...]
+    resolution: ProjectedResolution
+    roadmap_block: str
+
+    @property
+    def findings(self) -> tuple[Finding, ...]:
+        return self.resolution.findings
 
 
 def warning_delta(baseline: list[Finding] | tuple[Finding, ...], current: list[Finding] | tuple[Finding, ...]) -> WarningDelta:
@@ -941,6 +996,135 @@ def render_mermaid(res: Resolution) -> str:
 
 def render_block(res: Resolution) -> str:
     return f"{DAG_BEGIN}\n```mermaid\n{render_mermaid(res)}\n```\n{DAG_END}"
+
+
+def _landed_change_text(text: str, landed_at: str, archive_path: str) -> str:
+    values = parse_front_matter(text)
+    if values is None:
+        raise ValueError("change-invalid: missing front matter")
+    values["status"] = "landed"
+    values["landed_at"] = landed_at
+    values["archive_path"] = archive_path
+    _, body = split_front_matter(text)
+    body = re.sub(
+        r"^Status:.*$",
+        f"Status: Landed · {landed_at}",
+        body,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    return _render_front_matter(values, body)
+
+
+def _refreshed_dependent_text(text: str, change_id: str, target_hash: str) -> str:
+    values = parse_front_matter(text)
+    if values is None:
+        raise ValueError("dependent-invalid: missing front matter")
+    fingerprints = _as_map(values.get("fingerprints"))
+    if fingerprints.get(change_id) == target_hash:
+        return text
+    fingerprints[change_id] = target_hash
+    values["fingerprints"] = fingerprints
+    _, body = split_front_matter(text)
+    return _render_front_matter(values, body)
+
+
+def _without_generated_roadmap(text: str) -> str:
+    if DAG_BEGIN_PREFIX in text and DAG_END in text:
+        return text[: text.index(DAG_BEGIN_PREFIX)] + text[text.index(DAG_END) + len(DAG_END) :]
+    return text
+
+
+def _projected_resolution(result: Resolution) -> ProjectedResolution:
+    nodes = {
+        node_id: ProjectedNode(
+            id=node.id,
+            kind=node.kind,
+            path=node.path,
+            persistence=node.persistence,
+            status=node.status,
+            track=node.track,
+            depends_on=tuple(node.depends_on),
+            files_owned=tuple(node.files_owned),
+            gated_on=node.gated_on,
+            self_hash=node.self_hash,
+            dependents=tuple(node.dependents),
+        )
+        for node_id, node in result.nodes.items()
+    }
+    return ProjectedResolution(
+        nodes=MappingProxyType(nodes),
+        findings=tuple(result.findings),
+        topo_order=tuple(result.topo_order),
+        discovery=tuple(result.discovery),
+    )
+
+
+def project_landing(
+    root: Path,
+    settings: Settings,
+    result: Resolution,
+    *,
+    change_id: str,
+    archive_path: Path,
+    archive_relative: str,
+    landed_at: str,
+    planned_roadmap_text: str,
+) -> LandingProjection:
+    """Project one complete landed document-graph state without mutating caller-owned input."""
+    nodes = copy.deepcopy(result.nodes)
+    try:
+        change = nodes[change_id]
+    except KeyError:
+        raise ValueError(f"change-invalid: unknown change id {change_id!r}") from None
+    if not change.path.is_file():
+        raise ValueError("change-invalid: change document is missing")
+
+    change_text = _landed_change_text(
+        change.path.read_text(encoding="utf-8"), landed_at, archive_relative
+    )
+    target_hash = fingerprint(change_text)
+    change.path = archive_path
+    change.status = "landed"
+
+    dependent_documents: list[ProjectedDocument] = []
+    for node in sorted(nodes.values(), key=lambda item: item.id):
+        node.dependents.clear()
+        if not node.active or not any(edge.target == change_id for edge in node.depends_on):
+            continue
+        node.depends_on = [
+            Edge(edge.target, target_hash, edge.requires_status)
+            if edge.target == change_id
+            else edge
+            for edge in node.depends_on
+        ]
+        if node.path.is_file():
+            content = _refreshed_dependent_text(
+                node.path.read_text(encoding="utf-8"), change_id, target_hash
+            )
+            dependent_documents.append(ProjectedDocument(node.path, content))
+
+    _compute_dependents(nodes)
+    order, cycle = _topo_sort(nodes)
+    findings = validate(
+        root,
+        nodes,
+        cycle,
+        settings,
+        roadmap_override=_without_generated_roadmap(planned_roadmap_text),
+    )
+    transitioned = Resolution(
+        nodes=nodes,
+        findings=findings,
+        topo_order=order,
+        discovery=result.discovery,
+    )
+    return LandingProjection(
+        change_document=ProjectedDocument(archive_path, change_text),
+        dependent_documents=tuple(dependent_documents),
+        resolution=_projected_resolution(transitioned),
+        roadmap_block=render_block(transitioned),
+    )
 
 
 def update_roadmap(

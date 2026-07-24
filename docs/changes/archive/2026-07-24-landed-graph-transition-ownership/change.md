@@ -1,7 +1,7 @@
 ---
 id: landed-graph-transition-ownership
 persistence: ephemeral
-status: proposed
+status: landed
 track: architecture
 depends_on:
   - edge-fingerprint-policy
@@ -13,10 +13,12 @@ files_owned:
   - tests/test_resolver.py
   - tests/test_landing.py
   - docs/roadmap.md
+landed_at: 2026-07-24
+archive_path: docs/changes/archive/2026-07-24-landed-graph-transition-ownership
 ---
 # Own the landed graph transition
 
-Status: Proposed (not accepted) · Proposed 2026-07-24
+Status: Landed · 2026-07-24
 
 **Upstream dependencies:** `edge-fingerprint-policy` is landed and supplies the current advisory
 fingerprint behavior that the projection must preserve; transitively, it includes the transactional

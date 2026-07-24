@@ -24,7 +24,7 @@ persistence: living
 
 ## Architecture
 
-- `docs/changes/landed-graph-transition-ownership/` (proposed) — move projected landed document
+- `docs/changes/archive/2026-07-24-landed-graph-transition-ownership/` (landed) — move projected landed document
   state, topology, roadmap rendering, and validation behind one resolver-owned operation; depends on
   the landed edge-fingerprint policy
 - `docs/changes/unified-offline-live-verification/` (proposed) — consolidate check and landing
@@ -44,7 +44,7 @@ flowchart TD
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
-    landed_graph_transition_ownership["landed-graph-transition-ownership (proposed)"]
+    landed_graph_transition_ownership["landed-graph-transition-ownership (landed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
