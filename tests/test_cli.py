@@ -163,6 +163,23 @@ def test_ambiguous_root_policy_is_rejected(
     assert "config-invalid" in capsys.readouterr().err
 
 
+def test_invalid_settings_never_reach_cli_or_echo_command_arguments(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "repo"
+    private_argument = "private-command-argument"
+    _write(
+        root,
+        ".doc-contract.toml",
+        _config(capability_command=(private_argument, "")),
+    )
+
+    assert main(["check", "--repo-root", str(root)]) == 2
+    error = capsys.readouterr().err
+    assert "config-invalid" in error
+    assert private_argument not in error
+
+
 @pytest.mark.parametrize(
     "content, code",
     [

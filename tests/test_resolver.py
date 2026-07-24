@@ -18,11 +18,18 @@ def _write(root: Path, relative: str, content: str) -> Path:
     return path
 
 
-def _settings(root: Path, *, edge_fingerprints: str = "advisory") -> Settings:
+def _settings(
+    root: Path,
+    *,
+    edge_fingerprints: str = "advisory",
+    root_nodes: dict[str, str] | None = None,
+) -> Settings:
     return Settings(
         repo_root=root,
         repo_name="fixture",
-        root_nodes={"roadmap": "docs/roadmap.md"},
+        root_nodes=(
+            root_nodes if root_nodes is not None else {"roadmap": "docs/roadmap.md"}
+        ),
         edge_fingerprint_policy=edge_fingerprints,
     )
 
@@ -71,6 +78,17 @@ def test_discovery_defaults_to_tracked_and_declared_nodes(tmp_path: Path) -> Non
     assert [(item.node_id, item.included) for item in provisional.discovery] == [
         ("provisional", True)
     ]
+
+
+def test_resolver_fixture_cannot_construct_duplicate_root_paths(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="one path to multiple ids"):
+        _settings(
+            tmp_path,
+            root_nodes={
+                "roadmap": "docs/roadmap.md",
+                "duplicate": "docs/roadmap.md",
+            },
+        )
 
 
 def test_persistence_uses_repository_relative_paths(tmp_path: Path) -> None:

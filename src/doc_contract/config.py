@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import subprocess
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 CONFIG_NAME = ".doc-contract.toml"
@@ -23,11 +25,20 @@ class ConfigError(ValueError):
         self.detail = detail
 
 
+class SettingsError(ValueError):
+    """A value-free failure to construct a valid settings value."""
+
+    def __init__(self, detail: str, *, config_detail: str | None = None) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.config_detail = config_detail or detail
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     repo_root: Path
     repo_name: str
-    root_nodes: dict[str, str]
+    root_nodes: Mapping[str, str]
     optional_root_ids: tuple[str, ...] = ()
     roadmap: str = "docs/roadmap.md"
     capability_mode: str = "skip"
@@ -37,30 +48,109 @@ class Settings:
 
     def __post_init__(self) -> None:
         if (
+            not isinstance(self.repo_root, Path)
+            or not self.repo_root.is_absolute()
+            or ".." in self.repo_root.parts
+        ):
+            raise SettingsError("repo_root must be a resolved absolute path")
+        if not isinstance(self.repo_name, str) or not self.repo_name.strip():
+            raise SettingsError("repo_name must be a non-empty string")
+
+        roadmap = _settings_relative_path(self.roadmap, key="roadmap")
+        if not isinstance(self.root_nodes, Mapping):
+            raise SettingsError(
+                "root_nodes must be a mapping",
+                config_detail="root_nodes must be a table",
+            )
+        root_nodes: dict[str, str] = {}
+        for node_id, relative in self.root_nodes.items():
+            if not isinstance(node_id, str) or not node_id.strip():
+                raise SettingsError(
+                    "root_nodes keys must be non-empty strings",
+                    config_detail="root_nodes keys must be non-empty",
+                )
+            root_nodes[node_id] = _settings_relative_path(
+                relative, key=f"root_nodes.{node_id}"
+            )
+        optional_root_ids = _settings_string_tuple(
+            self.optional_root_ids,
+            key="optional_root_ids",
+            config_key="optional_roots",
+        )
+        unknown_optional = sorted(set(optional_root_ids) - set(root_nodes))
+        if unknown_optional:
+            raise SettingsError(
+                "optional_root_ids contains an unknown root node id",
+                config_detail="optional_roots contains an unknown root node id",
+            )
+        if len(set(root_nodes.values())) != len(root_nodes):
+            raise SettingsError("root_nodes must not assign one path to multiple ids")
+        if any(root_nodes[node_id] == roadmap for node_id in optional_root_ids):
+            raise SettingsError("the roadmap root cannot be optional")
+
+        if (
+            not isinstance(self.capability_mode, str)
+            or self.capability_mode not in {"skip", "optional", "required"}
+        ):
+            raise SettingsError(
+                "capability_mode is invalid", config_detail="capability.mode is invalid"
+            )
+        capability_command = _settings_string_tuple(
+            self.capability_command,
+            key="capability_command",
+            config_key="capability.command",
+        )
+        if self.capability_mode != "skip" and not capability_command:
+            raise SettingsError(
+                "capability_command is required for this mode",
+                config_detail="capability.command is required for this mode",
+            )
+        environment_names = _settings_string_tuple(
+            self.additional_environment_names,
+            key="additional_environment_names",
+            config_key="secret_env_names",
+        )
+        if (
             not isinstance(self.edge_fingerprint_policy, str)
             or self.edge_fingerprint_policy not in EDGE_FINGERPRINT_POLICIES
         ):
-            raise ValueError("edge_fingerprint_policy must be 'advisory' or 'required'")
+            raise SettingsError(
+                "edge_fingerprint_policy must be 'advisory' or 'required'",
+                config_detail="edge_fingerprints must be 'advisory' or 'required'",
+            )
+
+        object.__setattr__(self, "root_nodes", MappingProxyType(root_nodes))
+        object.__setattr__(self, "optional_root_ids", optional_root_ids)
+        object.__setattr__(self, "roadmap", roadmap)
+        object.__setattr__(self, "capability_command", capability_command)
+        object.__setattr__(self, "additional_environment_names", environment_names)
 
     @property
     def required_root_ids(self) -> tuple[str, ...]:
         return tuple(sorted(set(self.root_nodes) - set(self.optional_root_ids)))
 
 
-def _relative_path(value: object, *, key: str, config_path: Path) -> str:
+def _settings_relative_path(value: object, *, key: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ConfigError("config-invalid", config_path, f"{key} must be a non-empty path")
+        raise SettingsError(f"{key} must be a non-empty path")
     path = Path(value)
     if path.is_absolute() or ".." in path.parts:
-        raise ConfigError("config-invalid", config_path, f"{key} must stay inside repo root")
+        raise SettingsError(f"{key} must stay inside repo root")
     return path.as_posix()
 
 
-def _string_list(value: object, *, key: str, config_path: Path) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-        raise ConfigError("config-invalid", config_path, f"{key} must be an array of strings")
+def _settings_string_tuple(
+    value: object, *, key: str, config_key: str
+) -> tuple[str, ...]:
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise SettingsError(
+            f"{key} must be a sequence of strings",
+            config_detail=f"{config_key} must be an array of strings",
+        )
     return tuple(value)
 
 
@@ -80,76 +170,29 @@ def load_settings(repo_root: Path, config_path: Path | None = None) -> Settings:
 
     if raw.get("schema_version") != SCHEMA_VERSION:
         raise ConfigError("config-invalid", path, "unsupported or missing schema_version")
-    repo_name = raw.get("repo_name")
-    if not isinstance(repo_name, str) or not repo_name.strip():
-        raise ConfigError("config-invalid", path, "repo_name must be a non-empty string")
-    roadmap = _relative_path(
-        raw.get("roadmap", "docs/roadmap.md"), key="roadmap", config_path=path
-    )
-    edge_fingerprint_policy = raw.get("edge_fingerprints", "advisory")
-    if (
-        not isinstance(edge_fingerprint_policy, str)
-        or edge_fingerprint_policy not in EDGE_FINGERPRINT_POLICIES
-    ):
-        raise ConfigError(
-            "config-invalid", path, "edge_fingerprints must be 'advisory' or 'required'"
-        )
-
-    roots = raw.get("root_nodes")
-    if not isinstance(roots, dict):
-        raise ConfigError("config-invalid", path, "root_nodes must be a table")
-    root_nodes: dict[str, str] = {}
-    for node_id, relative in roots.items():
-        if not isinstance(node_id, str) or not node_id.strip():
-            raise ConfigError("config-invalid", path, "root_nodes keys must be non-empty")
-        root_nodes[node_id] = _relative_path(
-            relative, key=f"root_nodes.{node_id}", config_path=path
-        )
     if "required_roots" in raw:
         raise ConfigError(
             "config-invalid",
             path,
             "required_roots is obsolete; roots are required by default, use optional_roots",
         )
-    optional_root_ids = _string_list(
-        raw.get("optional_roots"), key="optional_roots", config_path=path
-    )
-    unknown_optional = sorted(set(optional_root_ids) - set(root_nodes))
-    if unknown_optional:
-        raise ConfigError(
-            "config-invalid", path, "optional_roots contains an unknown root node id"
-        )
-    if len(set(root_nodes.values())) != len(root_nodes):
-        raise ConfigError(
-            "config-invalid", path, "root_nodes must not assign one path to multiple ids"
-        )
-    if any(root_nodes[node_id] == roadmap for node_id in optional_root_ids):
-        raise ConfigError("config-invalid", path, "the roadmap root cannot be optional")
-
     capability = raw.get("capability", {})
     if not isinstance(capability, dict):
         raise ConfigError("config-invalid", path, "capability must be a table")
-    mode = capability.get("mode", "skip")
-    if mode not in {"skip", "optional", "required"}:
-        raise ConfigError("config-invalid", path, "capability.mode is invalid")
-    command = _string_list(capability.get("command"), key="capability.command", config_path=path)
-    if mode != "skip" and not command:
-        raise ConfigError("config-invalid", path, "capability.command is required for this mode")
-
-    environment_names = _string_list(
-        raw.get("secret_env_names"), key="secret_env_names", config_path=path
-    )
-    return Settings(
-        repo_root=root,
-        repo_name=repo_name,
-        root_nodes=root_nodes,
-        optional_root_ids=optional_root_ids,
-        roadmap=roadmap,
-        edge_fingerprint_policy=edge_fingerprint_policy,
-        capability_mode=mode,
-        capability_command=command,
-        additional_environment_names=environment_names,
-    )
+    try:
+        return Settings(
+            repo_root=root,
+            repo_name=raw.get("repo_name"),
+            root_nodes=raw.get("root_nodes"),
+            optional_root_ids=raw.get("optional_roots", ()),
+            roadmap=raw.get("roadmap", "docs/roadmap.md"),
+            edge_fingerprint_policy=raw.get("edge_fingerprints", "advisory"),
+            capability_mode=capability.get("mode", "skip"),
+            capability_command=capability.get("command", ()),
+            additional_environment_names=raw.get("secret_env_names", ()),
+        )
+    except SettingsError as exc:
+        raise ConfigError("config-invalid", path, exc.config_detail) from None
 
 
 def resolve_repo_root(

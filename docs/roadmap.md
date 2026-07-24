@@ -30,7 +30,7 @@ persistence: living
 - `docs/changes/unified-offline-live-verification/` (proposed) — consolidate check and landing
   capability policy, redacted execution, status/finding mapping, and warning composition behind one
   internal verification operation; depends on the landed edge-fingerprint policy
-- `docs/changes/always-valid-repository-settings/` (proposed) — make every direct or TOML-backed
+- `docs/changes/archive/2026-07-24-always-valid-repository-settings/` (landed) — make every direct or TOML-backed
   settings construction enforce the same immutable repository invariants; depends on the landed
   portable install contract convergence
 - `docs/changes/vendored-runtime-closure/` (proposed) — make sync materialize one deterministic,
@@ -40,7 +40,7 @@ persistence: living
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
 flowchart TD
-    always_valid_repository_settings["always-valid-repository-settings (proposed)"]
+    always_valid_repository_settings["always-valid-repository-settings (landed)"]
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]

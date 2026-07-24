@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import config
+import dag
 from dag import PERSISTENCE_CLASSES, REPO_ROOT, Finding, fingerprint, resolve
 
 # --------------------------------------------------------------------------- real corpus
@@ -286,6 +287,10 @@ def test_edge_fingerprint_policy_defaults_advisory_and_supports_required(
     _write(tmp_path, "docs/changes/a/change.md", _fm("a", depends=["adr-0001"]))
     assert config.EDGE_FINGERPRINT_POLICY == "advisory"
     assert "missing-fingerprint" not in _codes(resolve(tmp_path).findings, "ERROR")
+    legacy_settings = dag._settings(tmp_path)
+    assert legacy_settings.repo_root == tmp_path.resolve()
+    with pytest.raises(TypeError):
+        legacy_settings.root_nodes["other"] = "docs/other.md"  # type: ignore[index]
 
     monkeypatch.setattr(config, "EDGE_FINGERPRINT_POLICY", "required")
     assert "missing-fingerprint" in _codes(resolve(tmp_path).errors, "ERROR")

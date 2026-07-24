@@ -1,7 +1,7 @@
 ---
 id: always-valid-repository-settings
 persistence: ephemeral
-status: proposed
+status: landed
 track: architecture
 depends_on:
   - portable-install-contract-convergence
@@ -15,10 +15,12 @@ files_owned:
   - tests/test_cli.py
   - tests/test_resolver.py
   - docs/roadmap.md
+landed_at: 2026-07-24
+archive_path: docs/changes/archive/2026-07-24-always-valid-repository-settings
 ---
 # Make repository settings always valid
 
-Status: Proposed (not accepted) · Proposed 2026-07-24
+Status: Landed · 2026-07-24
 
 **Upstream dependencies:** `portable-install-contract-convergence` is landed and establishes
 `.doc-contract.toml` plus the packaged or vendored CLI as the canonical configuration boundary,
