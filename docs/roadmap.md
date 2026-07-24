@@ -27,6 +27,9 @@ persistence: living
 - `docs/changes/landed-graph-transition-ownership/` (proposed) — move projected landed document
   state, topology, roadmap rendering, and validation behind one resolver-owned operation; depends on
   the landed edge-fingerprint policy
+- `docs/changes/unified-offline-live-verification/` (proposed) — consolidate check and landing
+  capability policy, redacted execution, status/finding mapping, and warning composition behind one
+  internal verification operation; depends on the landed edge-fingerprint policy
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
@@ -38,9 +41,11 @@ flowchart TD
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
+    unified_offline_live_verification["unified-offline-live-verification (proposed)"]
     discovery_lifecycle_hardening --> edge_fingerprint_policy
     edge_fingerprint_policy --> landed_graph_transition_ownership
     edge_fingerprint_policy --> portable_install_contract_convergence
+    edge_fingerprint_policy --> unified_offline_live_verification
     global_cwd_independent_cli --> transactional_land_command
     secret_handling_guardrails --> global_cwd_independent_cli
     transactional_land_command --> discovery_lifecycle_hardening

@@ -26,9 +26,14 @@ infrastructure is gated; the full stdlib-only refactor is available now.
 **Dependents:** None. The roadmap and active change set contain no work that waits on this boundary.
 The other architecture-review candidates are independent opportunities, not blocked dependents.
 **Files owned:** The resolver's document-graph projection API, the landing planner that consumes it,
-focused resolver and landing regressions, and this change's roadmap entry. There are no other active
-change folders, so there is no current file-ownership overlap. The architecture-review HTML is an
-input to the proposal, not an owned or modified artifact.
+focused resolver and landing regressions, and this change's roadmap entry.
+`unified-offline-live-verification` also forecasts changes to `resolver.py`, `landing.py`,
+`tests/test_resolver.py`, `tests/test_landing.py`, and the roadmap. The overlap is soft because this
+change owns graph projection while that change owns capability execution and verification
+composition; whoever lands second must rebase and reconcile the shared imports/call site. If both
+become in-progress concurrently, coordinate the shared `landing.py` call site rather than adding a
+false DAG edge. The architecture-review HTML is an input to the proposal, not an owned or modified
+artifact.
 
 ## Why
 
