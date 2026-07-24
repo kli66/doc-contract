@@ -22,16 +22,24 @@ persistence: living
   `.doc-contract.toml` plus the packaged/vendored CLI, with sync-to-check proven in a clean
   temporary repository; depends on the landed edge-fingerprint policy
 
+## Architecture
+
+- `docs/changes/landed-graph-transition-ownership/` (proposed) — move projected landed document
+  state, topology, roadmap rendering, and validation behind one resolver-owned operation; depends on
+  the landed edge-fingerprint policy
+
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
 flowchart TD
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
+    landed_graph_transition_ownership["landed-graph-transition-ownership (proposed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     discovery_lifecycle_hardening --> edge_fingerprint_policy
+    edge_fingerprint_policy --> landed_graph_transition_ownership
     edge_fingerprint_policy --> portable_install_contract_convergence
     global_cwd_independent_cli --> transactional_land_command
     secret_handling_guardrails --> global_cwd_independent_cli
