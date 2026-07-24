@@ -68,8 +68,10 @@ cd /an/unrelated/directory
 python /path/to/repo/.doc-contract/doc_contract_cli.py check --repo-root /path/to/repo --offline
 ```
 
-`sync` writes `.doc-contract-manifest.json` with the package version and content hashes. It is
-idempotent and can be rerun to update the pin.
+`sync` vendors the complete running Python package and writes `.doc-contract-manifest.json` with
+that package's version and content hashes. The installed command, manifest, and vendored launcher
+report the same version without installed distribution metadata. Rerunning sync is idempotent, and
+modules no longer present in the running package are removed from the owned vendored package tree.
 
 ## Configuration contract
 
@@ -120,7 +122,8 @@ previews provisional node IDs and paths before `update` or `land` mutates anythi
 untracked candidates are reported and excluded. `check` is read-only and labels tolerated baseline
 warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap
 block after validation. `stamp` records or refreshes reviewed edge metadata even in advisory mode
-and refreshes strict frozen `self_hash` values. `sync` updates the vendored package and pin manifest.
+and refreshes strict frozen `self_hash` values. `sync` reconciles the complete vendored package and
+pin manifest, including removing stale generated runtime files, without rewriting current files.
 `land` previews and then atomically applies the status, dependent fingerprints, roadmap, and archive
 move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
 returns success without changing files or the Git index. Interrupted landings resume from the

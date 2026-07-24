@@ -28,9 +28,11 @@ refresh one frozen node's strict `self_hash` after review.
 
 ### `sync`
 
-Vendor the running package into `.doc-contract/vendor/` and write a deterministic
-`.doc-contract-manifest.json` containing the package version and SHA-256 pins. Repeating the command
-without a package change does not rewrite files.
+Vendor the complete running package into `.doc-contract/vendor/` and write a deterministic
+`.doc-contract-manifest.json` containing that package's version and SHA-256 pins. The installed
+command, manifest, and vendored launcher expose the same version without requiring installed
+distribution metadata in the target. Sync removes stale files from the owned vendored package tree,
+and repeating the command without a package change does not rewrite files.
 
 ### `land`
 

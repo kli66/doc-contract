@@ -1,7 +1,7 @@
 ---
 id: vendored-runtime-closure
 persistence: ephemeral
-status: proposed
+status: landed
 track: architecture
 depends_on:
   - portable-install-contract-convergence
@@ -13,10 +13,12 @@ files_owned:
   - docs/spec/capabilities.md
   - README.md
   - docs/roadmap.md
+landed_at: 2026-07-24
+archive_path: docs/changes/archive/2026-07-24-vendored-runtime-closure
 ---
 # Deepen the vendored runtime closure
 
-Status: Proposed (not accepted) · Proposed 2026-07-24
+Status: Landed · 2026-07-24
 
 **Upstream dependencies:** `portable-install-contract-convergence` is landed and establishes the
 packaged or vendored CLI as the portable execution boundary, including the clean-repository

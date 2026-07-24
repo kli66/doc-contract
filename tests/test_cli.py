@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import doc_contract.sync as sync_runtime
 from doc_contract.cli import COMMANDS, main
 from doc_contract.config import load_settings
 from doc_contract.resolver import fingerprint, resolve
@@ -327,17 +329,189 @@ def test_sync_writes_pinned_manifest_and_is_idempotent(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = _repo(tmp_path / "repo")
+    stale = _write(
+        repo,
+        ".doc-contract/vendor/doc_contract/removed_module.py",
+        "raise RuntimeError('stale')\n",
+    )
+    outside_package = _write(repo, ".doc-contract/vendor/retained.txt", "not package-owned\n")
+    outside_tree = _write(repo, "retained.txt", "not generated\n")
+    external_directory = tmp_path / "external"
+    external_directory.mkdir()
+    external_file = _write(external_directory, "untouched.py", "outside = True\n")
+    stale_symlink = repo / ".doc-contract/vendor/doc_contract/removed_directory"
+    stale_symlink.symlink_to(external_directory, target_is_directory=True)
+
     assert main(["sync", "--repo-root", str(repo)]) == 0
     manifest = json.loads((repo / ".doc-contract-manifest.json").read_text(encoding="utf-8"))
     assert manifest["version"]
-    assert "doc_contract/cli.py" in manifest["files"]
-    assert "doc_contract/landing.py" in manifest["files"]
-    assert (repo / ".doc-contract/vendor/doc_contract/resolver.py").is_file()
-    assert (repo / ".doc-contract/doc_contract_cli.py").is_file()
+    package_source = Path(sync_runtime.__file__).resolve().parent
+    expected_package_files = {
+        path.relative_to(package_source).as_posix()
+        for path in package_source.rglob("*.py")
+        if path.is_file()
+    }
+    expected_package_files.add("_version.py")
+    vendor = repo / ".doc-contract/vendor/doc_contract"
+    vendored_package_files = {
+        path.relative_to(vendor).as_posix() for path in vendor.rglob("*") if path.is_file()
+    }
+    manifest_package_files = {
+        path.removeprefix("doc_contract/")
+        for path in manifest["files"]
+        if path.startswith("doc_contract/")
+    }
+    assert vendored_package_files == manifest_package_files == expected_package_files
+    for relative, digest in manifest["files"].items():
+        target = repo / relative
+        if relative.startswith("doc_contract/"):
+            target = repo / ".doc-contract/vendor" / relative
+        assert hashlib.sha256(target.read_bytes()).hexdigest() == digest
+    assert not stale.exists()
+    assert not stale_symlink.exists()
+    assert outside_package.read_text(encoding="utf-8") == "not package-owned\n"
+    assert outside_tree.read_text(encoding="utf-8") == "not generated\n"
+    assert external_file.read_text(encoding="utf-8") == "outside = True\n"
+
+    generated_files = [
+        *[path for path in vendor.rglob("*") if path.is_file()],
+        repo / ".doc-contract/doc_contract_cli.py",
+        repo / ".doc-contract-manifest.json",
+    ]
+    mtimes = {path: path.stat().st_mtime_ns for path in generated_files}
     capsys.readouterr()
 
     assert main(["sync", "--repo-root", str(repo)]) == 0
     assert "already current" in capsys.readouterr().out
+    assert {path: path.stat().st_mtime_ns for path in generated_files} == mtimes
+
+
+def test_sync_discovers_new_modules_and_rewrites_only_changed_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "running-package"
+    _write(source, "__init__.py", "package = True\n")
+    _write(source, "cli.py", "def main():\n    return 0\n")
+    automatic = _write(source, "nested/automatic.py", "VALUE = 1\n")
+    _write(source, "nested/__init__.py", "nested = True\n")
+    monkeypatch.setattr(sync_runtime, "_package_source", lambda: source)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert sync_runtime.sync_package(repo)
+    manifest_path = repo / ".doc-contract-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "doc_contract/nested/automatic.py" in manifest["files"]
+    assert "doc_contract/_version.py" in manifest["files"]
+
+    generated_files = [
+        *[
+            path
+            for path in (repo / ".doc-contract/vendor/doc_contract").rglob("*")
+            if path.is_file()
+        ],
+        repo / ".doc-contract/doc_contract_cli.py",
+        manifest_path,
+    ]
+    initial_bytes = {path: path.read_bytes() for path in generated_files}
+    initial_mtimes = {path: path.stat().st_mtime_ns for path in generated_files}
+    assert not sync_runtime.sync_package(repo)
+    assert {path: path.stat().st_mtime_ns for path in generated_files} == initial_mtimes
+
+    automatic.write_text("VALUE = 2\n", encoding="utf-8")
+    assert sync_runtime.sync_package(repo)
+    changed = {path for path in generated_files if path.read_bytes() != initial_bytes[path]}
+    assert changed == {
+        repo / ".doc-contract/vendor/doc_contract/nested/automatic.py",
+        manifest_path,
+    }
+    unchanged = set(generated_files) - changed
+    assert {path: path.stat().st_mtime_ns for path in unchanged} == {
+        path: initial_mtimes[path] for path in unchanged
+    }
+
+
+def test_sync_missing_required_entry_fails_before_manifest_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "incomplete-package"
+    _write(source, "__init__.py", "package = True\n")
+    monkeypatch.setattr(sync_runtime, "_package_source", lambda: source)
+    repo = tmp_path / "repo"
+    previous_manifest = _write(repo, ".doc-contract-manifest.json", "previous manifest\n")
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"^runtime image missing required entry module: cli\.py$",
+    ):
+        sync_runtime.sync_package(repo)
+
+    assert previous_manifest.read_text(encoding="utf-8") == "previous manifest\n"
+    assert not (repo / ".doc-contract").exists()
+
+
+def test_sync_fails_closed_when_stale_package_content_cannot_be_pruned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert sync_runtime.sync_package(repo)
+    manifest = repo / ".doc-contract-manifest.json"
+    manifest_bytes = manifest.read_bytes()
+    stale_file = _write(
+        repo,
+        ".doc-contract/vendor/doc_contract/unreadable/stale.py",
+        "stale = True\n",
+    )
+
+    def inaccessible_walk(
+        _top: Path,
+        *,
+        topdown: bool,
+        onerror: object,
+        followlinks: bool,
+    ) -> tuple[tuple[str, list[str], list[str]], ...]:
+        assert topdown is False
+        assert followlinks is False
+        assert callable(onerror)
+        onerror(PermissionError("cannot inspect generated package"))
+        return ()
+
+    monkeypatch.setattr(sync_runtime.os, "walk", inaccessible_walk)
+    with pytest.raises(PermissionError, match="cannot inspect generated package"):
+        sync_runtime.sync_package(repo)
+
+    assert manifest.read_bytes() == manifest_bytes
+    assert stale_file.is_file()
+
+
+def test_sync_rejects_symlink_in_generated_package_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "running-package"
+    _write(source, "__init__.py", "package = True\n")
+    _write(source, "cli.py", "def main():\n    return 0\n")
+    _write(source, "nested/automatic.py", "VALUE = 1\n")
+    monkeypatch.setattr(sync_runtime, "_package_source", lambda: source)
+
+    repo = tmp_path / "repo"
+    vendor = repo / ".doc-contract/vendor/doc_contract"
+    vendor.mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    external_marker = _write(external, "retained.py", "outside = True\n")
+    (vendor / "nested").symlink_to(external, target_is_directory=True)
+    manifest = _write(repo, ".doc-contract-manifest.json", "previous manifest\n")
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"^vendored runtime directory contains a symbolic link$",
+    ):
+        sync_runtime.sync_package(repo)
+
+    assert manifest.read_text(encoding="utf-8") == "previous manifest\n"
+    assert external_marker.read_text(encoding="utf-8") == "outside = True\n"
+    assert not (external / "automatic.py").exists()
 
 
 def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
@@ -358,6 +532,15 @@ def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
     elsewhere.mkdir()
     clean_environment = os.environ.copy()
     clean_environment.pop("PYTHONPATH", None)
+    installed_version = subprocess.run(
+        [sys.executable, "-m", "doc_contract.cli", "--version"],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert installed_version.returncode == 0, installed_version.stderr
     synced = subprocess.run(
         [
             sys.executable,
@@ -377,6 +560,19 @@ def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
     assert "vendored package updated" in synced.stdout
 
     launcher = repo / ".doc-contract/doc_contract_cli.py"
+    vendored_version = subprocess.run(
+        [sys.executable, str(launcher), "--version"],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert vendored_version.returncode == 0, vendored_version.stderr
+    manifest = json.loads((repo / ".doc-contract-manifest.json").read_text(encoding="utf-8"))
+    assert installed_version.stdout.strip() == manifest["version"]
+    assert vendored_version.stdout.strip() == manifest["version"]
+
     checked = subprocess.run(
         [
             sys.executable,
