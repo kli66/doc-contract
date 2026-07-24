@@ -27,7 +27,7 @@ testpaths = ["tests", "scripts"]
 pythonpath = ["src", "scripts"]
 
 [tool.setuptools_scm]
-tag_regex = "^v(?P<version>\\d+!?(?:\\d+\\.)*\\d+(?:[-+].*)?)$"
+tag_regex = "^v(?P<version>\\d+(?:\\.\\d+){2}(?:[-+].*)?)$"
 fallback_version = "0.0.0"
 version_file = "src/doc_contract/_version.py"
 
