@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +11,9 @@ from typing import Sequence
 from . import __version__
 from .config import ConfigError, Settings, load_settings, resolve_repo_root
 from .landing import LandingError, LandingPlan, execute_landing
-from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap, warning_delta
+from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap
 from .sync import sync_package
+from .verification import VerificationPolicy, verify
 
 COMMANDS = frozenset({"check", "update", "stamp", "sync", "land"})
 
@@ -75,59 +75,29 @@ def _print_discovery_preview(result: Resolution) -> None:
         print(f"  + {record.node_id}: {record.path}")
 
 
-def _capability_status(settings: Settings, *, offline: bool) -> tuple[str, Finding | None]:
-    if settings.capability_mode == "skip":
-        return "live skipped", None
-    if offline:
-        if settings.capability_mode == "required":
-            return "live skipped", Finding(
-                "ERROR", "capability-check-required", "required live check was skipped"
-            )
-        return "live skipped", None
-    try:
-        result = subprocess.run(
-            settings.capability_command,
-            cwd=settings.repo_root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=300,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return "live skipped", Finding(
-            "ERROR",
-            "capability-check-failed",
-            f"capability subprocess unavailable ({type(exc).__name__})",
-        )
-    if result.returncode:
-        return "live failed", Finding(
-            "ERROR",
-            "capability-check-failed",
-            f"capability subprocess exited {result.returncode}",
-        )
-    return "live passed", None
-
-
 def _check(context: Context, *, offline: bool, include_untracked: bool) -> int:
     result = resolve(context.root, context.settings, include_untracked=include_untracked)
     _print_discovery_preview(result)
-    live_status, live_finding = _capability_status(context.settings, offline=offline)
-    findings = list(result.findings)
-    if live_finding is not None:
-        findings.append(live_finding)
-    _print_findings([finding for finding in findings if finding.level == "ERROR"])
-    errors = [finding for finding in findings if finding.level == "ERROR"]
-    report = warning_delta(result.warnings, result.warnings)
+    outcome = verify(
+        result,
+        VerificationPolicy(
+            repo_root=context.settings.repo_root,
+            capability_mode=context.settings.capability_mode,
+            capability_command=context.settings.capability_command,
+            live_requested=not offline,
+        ),
+        baseline_warnings=result.warnings,
+    )
+    _print_findings(outcome.errors)
+    report = outcome.warning_report
     for finding in report.baseline:
         print(f"WARN BASELINE: [{finding.code}] {finding.message}")
-    offline_status = "offline verified" if not result.errors else "offline failed"
     print(
-        f"{offline_status}; {live_status}; {len(errors)} error(s), "
+        f"{outcome.offline_status}; {outcome.live_status}; {len(outcome.errors)} error(s), "
         f"{len(report.baseline)} baseline warning(s), 0 new warning(s); "
         f"{len(result.nodes)} nodes"
     )
-    return 1 if errors else 0
+    return 1 if outcome.errors else 0
 
 
 def _update(context: Context, *, include_untracked: bool) -> int:

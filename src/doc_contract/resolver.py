@@ -306,13 +306,6 @@ class DiscoveryResult:
     records: tuple[DiscoveryRecord, ...]
 
 
-@dataclass(frozen=True)
-class WarningDelta:
-    baseline: tuple[Finding, ...]
-    introduced: tuple[Finding, ...]
-    resolved: tuple[Finding, ...]
-
-
 @dataclass(frozen=True, slots=True)
 class ProjectedDocument:
     path: Path
@@ -364,21 +357,6 @@ class LandingProjection:
     @property
     def findings(self) -> tuple[Finding, ...]:
         return self.resolution.findings
-
-
-def warning_delta(baseline: list[Finding] | tuple[Finding, ...], current: list[Finding] | tuple[Finding, ...]) -> WarningDelta:
-    def key(finding: Finding) -> tuple[str, str]:
-        if finding.code == "untracked-node-included":
-            return finding.code, finding.message.split(" ", 1)[0]
-        return finding.code, finding.message
-
-    before = {key(finding): finding for finding in baseline if finding.level == "WARN"}
-    after = {key(finding): finding for finding in current if finding.level == "WARN"}
-    return WarningDelta(
-        baseline=tuple(after[item] for item in sorted(before.keys() & after.keys())),
-        introduced=tuple(after[item] for item in sorted(after.keys() - before.keys())),
-        resolved=tuple(before[item] for item in sorted(before.keys() - after.keys())),
-    )
 
 
 # --------------------------------------------------------------------------- discovery

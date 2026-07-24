@@ -1,7 +1,7 @@
 ---
 id: unified-offline-live-verification
 persistence: ephemeral
-status: proposed
+status: landed
 track: architecture
 depends_on:
   - edge-fingerprint-policy
@@ -12,7 +12,6 @@ files_owned:
   - src/doc_contract/cli.py
   - src/doc_contract/landing.py
   - src/doc_contract/resolver.py
-  - src/doc_contract/sync.py
   - tests/test_verification.py
   - tests/test_cli.py
   - tests/test_landing.py
@@ -20,10 +19,12 @@ files_owned:
   - docs/spec/capabilities.md
   - README.md
   - docs/roadmap.md
+landed_at: 2026-07-24
+archive_path: docs/changes/archive/2026-07-24-unified-offline-live-verification
 ---
 # Unify offline and live verification
 
-Status: Proposed (not accepted) · Proposed 2026-07-24
+Status: Landed · 2026-07-24
 
 **Upstream dependencies:** `edge-fingerprint-policy` is landed and supplies the current
 baseline-versus-new warning model and advisory fingerprint behavior that composed verification must
@@ -31,16 +32,17 @@ preserve. Transitively, it includes the packaged check command, transactional la
 value-free subprocess guardrails whose duplicated verification paths are being consolidated. Its
 reviewed body fingerprint is recorded above. No ADR governs this internal boundary, and no external
 infrastructure is gated: subprocess behavior is fully testable with local commands and doubles.
+Since this proposal was written, `vendored-runtime-closure` and
+`landed-graph-transition-ownership` have landed. They are now implementation baselines rather than
+new dependency edges: verification modules join the vendored image automatically, and the landing
+caller consumes the resolver-owned graph projection before final verification.
 **Dependents:** None. The roadmap and active change set contain no work that waits on this seam.
-`landed-graph-transition-ownership` is an independent candidate, not a prerequisite or dependent.
 **Files owned:** One new internal verification module; the CLI and landing callers; the resolver's
-current warning-delta types; vendored package closure; focused unit and caller regressions; and the
-consumer behavior reference, README, and roadmap. `landed-graph-transition-ownership` also forecasts
-changes to `resolver.py`, `landing.py`, `tests/test_resolver.py`, `tests/test_landing.py`, and the
-roadmap. The overlap is soft because it owns graph projection while this change owns capability
-execution and verification composition; whoever lands second must rebase and reconcile the shared
-imports/call site. If both become in-progress concurrently, treat the shared `landing.py` call site
-as a coordination boundary rather than adding a false DAG edge.
+current warning-delta types; focused unit and caller regressions; the vendored verification smoke;
+and the consumer behavior reference, README, and roadmap. The graph-projection overlap has already
+landed, so this change must preserve `project_landing` as the single preflight projection call while
+replacing only final verification composition. The vendored runtime discovers the new module
+without a `sync.py` inventory edit.
 
 ## Why
 
@@ -78,11 +80,11 @@ present; preserve journal retention on any final offline or live error. Move `Wa
 `warning_delta` from the resolver into verification so warning composition has one owner, while
 leaving graph discovery and validation in the resolver.
 
-Add the new module to `sync.PACKAGE_FILES` and extend the clean-repository vendored smoke test so an
-air-gapped launcher exercises the same verification path. Update the capability reference and README
-to describe one mode/status matrix for `check` and `land`. Preserve command grammar, configuration
-schema, summary vocabulary, default timeout, subprocess suppression, dry-run behavior, and the rule
-that `land --dry-run` performs no live check.
+Extend the clean-repository vendored smoke test so automatic runtime discovery includes the new
+module and an air-gapped launcher exercises the same verification path. Update the capability
+reference and README to describe one mode/status matrix for `check` and `land`. Preserve command
+grammar, configuration schema, summary vocabulary, default timeout, subprocess suppression,
+dry-run behavior, and the rule that `land --dry-run` performs no live check.
 
 **Δ REMOVED** — Remove `cli._capability_status`, `landing._capability`, direct capability
 subprocess execution from those modules, and resolver ownership of warning-delta composition. Add no
@@ -106,8 +108,9 @@ into verification.
 5. Add direct matrix/redaction/composition tests plus CLI/landing parity regressions, including
    required offline skip, failed final live verification, retained journals, and unchanged dry-run
    behavior.
-6. Add `verification.py` to the vendored runtime closure and extend packaged-to-vendored smoke
-   coverage to prove offline and local live checks work from an unrelated cwd.
+6. Prove automatic runtime discovery includes `verification.py` and extend packaged-to-vendored
+   smoke coverage so offline and local live checks work from an unrelated cwd without a manual
+   package inventory edit.
 7. Update `docs/spec/capabilities.md` and `README.md` with the shared observable verification rules;
    run the capability coverage tripwire and confirm the CLI command set remains unchanged.
 8. On land: archive this folder through the transactional command and retain the roadmap lineage.

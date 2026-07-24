@@ -22,9 +22,8 @@ from .resolver import (
     parse_front_matter,
     project_landing,
     resolve,
-    WarningDelta,
-    warning_delta,
 )
+from .verification import VerificationOutcome, VerificationPolicy, WarningDelta, verify
 
 TrackingMode = Literal["tracked", "untracked"]
 JOURNAL_SCHEMA = 2
@@ -162,9 +161,21 @@ class LandingPlan:
 class LandingOutcome:
     plan: LandingPlan | None
     already_landed: bool
-    final_findings: tuple[Finding, ...] = ()
-    capability_status: str = "not-run"
-    warning_report: WarningDelta = WarningDelta((), (), ())
+    verification: VerificationOutcome | None = None
+
+    @property
+    def final_findings(self) -> tuple[Finding, ...]:
+        return self.verification.findings if self.verification is not None else ()
+
+    @property
+    def capability_status(self) -> str:
+        return self.verification.live_status if self.verification is not None else "not-run"
+
+    @property
+    def warning_report(self) -> WarningDelta:
+        if self.verification is None:
+            return WarningDelta((), (), ())
+        return self.verification.warning_report
 
 
 def _required_str(raw: dict[str, object], key: str) -> str:
@@ -506,26 +517,6 @@ def _apply_mutation(root: Path, plan: LandingPlan, mutation: Mutation) -> None:
         os.replace(path, destination)
 
 
-def _capability(settings: Settings) -> tuple[str, Finding | None]:
-    if settings.capability_mode == "skip":
-        return "live skipped", None
-    try:
-        result = subprocess.run(
-            settings.capability_command,
-            cwd=settings.repo_root,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=300,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return "live skipped", Finding("ERROR", "capability-check-failed", type(exc).__name__)
-    if result.returncode:
-        return "live failed", Finding("ERROR", "capability-check-failed", f"exit {result.returncode}")
-    return "live passed", None
-
-
 def _find_completed(root: Path, change_id: str) -> bool:
     archive_root = root / "docs/changes/archive"
     if not archive_root.is_dir():
@@ -608,12 +599,17 @@ def execute_landing(
         if fault_after is not None and len(completed) >= fault_after:
             raise InjectedInterruption("injected-interruption")
     final = resolve(root, settings, include_untracked=include_untracked)
-    capability_status, capability_finding = _capability(settings)
-    findings = list(final.findings)
-    if capability_finding is not None:
-        findings.append(capability_finding)
-    report = warning_delta(plan.baseline_warnings, findings)
-    if any(finding.level == "ERROR" for finding in findings):
-        return LandingOutcome(plan, False, tuple(findings), capability_status, report)
+    verification = verify(
+        final,
+        VerificationPolicy(
+            repo_root=settings.repo_root,
+            capability_mode=settings.capability_mode,
+            capability_command=settings.capability_command,
+            live_requested=True,
+        ),
+        baseline_warnings=plan.baseline_warnings,
+    )
+    if verification.errors:
+        return LandingOutcome(plan, False, verification)
     journal_path.unlink(missing_ok=True)
-    return LandingOutcome(plan, False, tuple(findings), capability_status, report)
+    return LandingOutcome(plan, False, verification)

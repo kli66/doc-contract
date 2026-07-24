@@ -12,14 +12,12 @@ import pytest
 from doc_contract.config import Settings
 from doc_contract.resolver import (
     Edge,
-    Finding,
     Node,
     Resolution,
     fingerprint,
     project_landing,
     render_block,
     resolve,
-    warning_delta,
 )
 
 
@@ -136,8 +134,6 @@ def test_invalid_edge_hashes_warn_in_advisory_and_fail_when_required(
     assert code in {finding.code for finding in advisory.warnings}
     assert code not in {finding.code for finding in advisory.errors}
     assert any("doc-contract stamp source" in finding.message for finding in advisory.warnings)
-    assert code in {finding.code for finding in warning_delta([], advisory.warnings).introduced}
-
     required = resolve(root, _settings(root, edge_fingerprints="required"))
     assert code in {finding.code for finding in required.errors}
 
@@ -221,27 +217,6 @@ def test_pending_frozen_self_hash_is_error(tmp_path: Path) -> None:
     )
     result = resolve(root, _settings(root))
     assert "hash-pending" in {finding.code for finding in result.errors}
-
-
-def test_warning_delta_tracks_same_untracked_node_across_archive_path() -> None:
-    before = [
-        Finding(
-            "WARN",
-            "untracked-node-included",
-            "example (docs/changes/example/change.md) is included provisionally",
-        )
-    ]
-    after = [
-        Finding(
-            "WARN",
-            "untracked-node-included",
-            "example (docs/changes/archive/2026-07-23-example/change.md) is included provisionally",
-        )
-    ]
-    report = warning_delta(before, after)
-    assert report.baseline == tuple(after)
-    assert not report.introduced
-    assert not report.resolved
 
 
 def test_landing_projection_owns_rewrites_graph_and_validation(tmp_path: Path) -> None:

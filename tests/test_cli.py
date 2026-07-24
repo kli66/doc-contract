@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import doc_contract.cli as cli_runtime
 import doc_contract.sync as sync_runtime
 from doc_contract.cli import COMMANDS, main
 from doc_contract.config import load_settings
@@ -79,6 +80,24 @@ def test_check_uses_explicit_root_after_leaving_repository(
     output = capsys.readouterr().out
     assert "offline verified; live skipped" in output
     assert "1 nodes" in output
+
+
+def test_check_resolves_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path / "repo")
+    real_resolve = cli_runtime.resolve
+    calls = 0
+
+    def counted_resolve(*args: object, **kwargs: object):
+        nonlocal calls
+        calls += 1
+        return real_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(cli_runtime, "resolve", counted_resolve)
+
+    assert main(["check", "--repo-root", str(repo), "--offline"]) == 0
+    assert calls == 1
 
 
 @pytest.mark.parametrize("kind", ["absent", "missing-roadmap", "zero-nodes"])
@@ -224,6 +243,32 @@ def test_optional_capability_can_be_skipped_or_passed(
     assert "live skipped" in capsys.readouterr().out
     assert main(["check", "--repo-root", str(repo)]) == 0
     assert "live passed" in capsys.readouterr().out
+
+
+def test_required_capability_fails_when_offline_without_executing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    marker = repo / "capability-ran"
+    _write(
+        repo,
+        ".doc-contract.toml",
+        _config(
+            capability_mode="required",
+            capability_command=(
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; Path({str(marker)!r}).touch()",
+            ),
+        ),
+    )
+    _write(repo, "docs/roadmap.md", "---\npersistence: living\n---\n# Roadmap\n")
+
+    assert main(["check", "--repo-root", str(repo), "--offline"]) == 1
+    output = capsys.readouterr().out
+    assert "capability-check-required" in output
+    assert "offline verified; live skipped" in output
+    assert not marker.exists()
 
 
 def test_capability_output_is_not_forwarded(
@@ -514,14 +559,18 @@ def test_sync_rejects_symlink_in_generated_package_path(
     assert not (external / "automatic.py").exists()
 
 
-def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
+def test_packaged_sync_produces_vendored_verification_from_unrelated_cwd(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "fresh-repo"
     _write(
         repo,
         ".doc-contract.toml",
-        _config(roots={"contract": "AGENTS.md", "roadmap": "docs/roadmap.md"}),
+        _config(
+            roots={"contract": "AGENTS.md", "roadmap": "docs/roadmap.md"},
+            capability_mode="optional",
+            capability_command=(sys.executable, "-c", "raise SystemExit(0)"),
+        ),
     )
     _write(repo, "AGENTS.md", "---\npersistence: living\n---\n# Operating contract\n")
     _write(repo, "docs/roadmap.md", "---\npersistence: living\n---\n# Roadmap\n")
@@ -572,6 +621,8 @@ def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
     manifest = json.loads((repo / ".doc-contract-manifest.json").read_text(encoding="utf-8"))
     assert installed_version.stdout.strip() == manifest["version"]
     assert vendored_version.stdout.strip() == manifest["version"]
+    assert "doc_contract/verification.py" in manifest["files"]
+    assert (repo / ".doc-contract/vendor/doc_contract/verification.py").is_file()
 
     checked = subprocess.run(
         [
@@ -591,6 +642,23 @@ def test_packaged_sync_produces_offline_vendored_check_from_unrelated_cwd(
     assert checked.returncode == 0, checked.stderr
     assert "offline verified; live skipped" in checked.stdout
     assert "2 nodes" in checked.stdout
+
+    live_checked = subprocess.run(
+        [
+            sys.executable,
+            str(launcher),
+            "check",
+            "--repo-root",
+            str(repo),
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert live_checked.returncode == 0, live_checked.stderr
+    assert "offline verified; live passed" in live_checked.stdout
     assert launcher.is_file()
     assert not (repo / ".claude").exists()
 

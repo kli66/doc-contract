@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from doc_contract.cli import main
 from doc_contract.config import load_settings
 from doc_contract.landing import (
     ConcurrentModification,
@@ -16,7 +17,7 @@ from doc_contract.landing import (
     execute_landing,
     plan_landing,
 )
-from doc_contract.resolver import fingerprint
+from doc_contract.resolver import Finding, fingerprint, resolve
 
 
 def _write(root: Path, relative: str, content: str) -> Path:
@@ -246,8 +247,12 @@ def test_destination_collision_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_failed_final_validation_retains_journal(tmp_path: Path) -> None:
+def test_failed_final_validation_matches_check_and_retains_journal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = _repo(tmp_path, capability="fail")
+    assert main(["check", "--repo-root", str(root), "--include-untracked"]) == 1
+    check_output = capsys.readouterr().out
     outcome = execute_landing(
         root,
         _settings(root),
@@ -255,8 +260,97 @@ def test_failed_final_validation_retains_journal(tmp_path: Path) -> None:
         date="2026-07-23",
         include_untracked=True,
     )
-    assert any(finding.code == "capability-check-failed" for finding in outcome.final_findings)
+    failure = next(
+        finding
+        for finding in outcome.final_findings
+        if finding.code == "capability-check-failed"
+    )
+    assert failure.message in check_output
+    assert outcome.capability_status == "live failed"
+    assert outcome.verification is not None
     assert list((root / ".git").glob("doc-contract/land-*.json"))
+
+
+def test_failed_final_offline_validation_retains_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    real_resolve = resolve
+    calls = 0
+
+    def fail_final_resolution(*args: object, **kwargs: object):
+        nonlocal calls
+        calls += 1
+        result = real_resolve(*args, **kwargs)
+        if calls == 3:
+            result.findings.append(
+                Finding("ERROR", "final-offline-error", "final offline validation failed")
+            )
+        return result
+
+    monkeypatch.setattr("doc_contract.landing.resolve", fail_final_resolution)
+    outcome = execute_landing(
+        root,
+        _settings(root),
+        "transactional",
+        date="2026-07-23",
+        include_untracked=True,
+    )
+
+    assert calls == 3
+    assert outcome.verification is not None
+    assert outcome.verification.offline_status == "offline failed"
+    assert outcome.capability_status == "live skipped"
+    assert "final-offline-error" in {finding.code for finding in outcome.final_findings}
+    assert list((root / ".git").glob("doc-contract/land-*.json"))
+
+
+def test_dry_run_and_completed_noop_do_not_execute_live_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path, capability="required")
+    calls = 0
+
+    def succeed(*_args: object, **_kwargs: object) -> tuple[str, None]:
+        nonlocal calls
+        calls += 1
+        assert not (root / "docs/changes/transactional").exists()
+        assert (root / "docs/changes/archive/2026-07-23-transactional").is_dir()
+        return "live passed", None
+
+    monkeypatch.setattr("doc_contract.verification._run_capability", succeed)
+    dry_run = execute_landing(
+        root,
+        _settings(root),
+        "transactional",
+        dry_run=True,
+        date="2026-07-23",
+        include_untracked=True,
+    )
+    assert calls == 0
+    assert dry_run.capability_status == "not-run"
+
+    landed = execute_landing(
+        root,
+        _settings(root),
+        "transactional",
+        date="2026-07-23",
+        include_untracked=True,
+    )
+    assert calls == 1
+    assert landed.capability_status == "live passed"
+    assert not list((root / ".git").glob("doc-contract/land-*.json"))
+
+    completed = execute_landing(
+        root,
+        _settings(root),
+        "transactional",
+        date="2026-07-23",
+        include_untracked=True,
+    )
+    assert completed.already_landed
+    assert completed.capability_status == "not-run"
+    assert calls == 1
 
 
 def test_landing_imports_no_private_resolver_symbols() -> None:
@@ -283,3 +377,4 @@ def test_landing_imports_no_private_resolver_symbols() -> None:
     assert not [name for name in resolver_imports if name.startswith("_")]
     assert len(projection_calls) == 1
     assert "_simulate" not in function_names
+    assert "_capability" not in function_names

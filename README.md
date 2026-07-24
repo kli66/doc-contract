@@ -100,8 +100,15 @@ mode = "optional" # skip, optional, or required
 command = ["python", "-m", "pytest", "-q", "tests/test_documented_capabilities.py"]
 ```
 
-Subprocess output is suppressed so a project check cannot copy credentials into resolver reports.
-The summary reports `offline verified`, `live skipped`, `live passed`, or a failure distinctly.
+`check` and final landing use one verification boundary. Offline resolution always reports `offline verified` or `offline failed`. Live behavior is shared:
+
+| Capability mode | `check --offline` | Ordinary `check` and final landing |
+| --- | --- | --- |
+| `skip` | `live skipped`, no live error | `live skipped`, no live error |
+| `optional` | `live skipped`, no live error | run the configured command |
+| `required` | `live skipped`, error | run the configured command |
+
+An executed command reports `live passed` on zero exit, `live failed` on nonzero exit, and `live skipped` when unavailable or timed out. Every failure is value-free. The subprocess runs at the selected repository root with stdin, stdout, and stderr disconnected, so command arguments, output, environment values, and exception text cannot enter reports. `land --dry-run` and an already-landed no-op never request live work; a mutated landing verifies after its mutations and retains its journal on any final offline or live error.
 
 ## Commands
 
