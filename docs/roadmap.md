@@ -33,6 +33,9 @@ persistence: living
 - `docs/changes/always-valid-repository-settings/` (proposed) — make every direct or TOML-backed
   settings construction enforce the same immutable repository invariants; depends on the landed
   portable install contract convergence
+- `docs/changes/vendored-runtime-closure/` (proposed) — make sync materialize one deterministic,
+  complete runtime image whose isolated launcher and manifest share the installed package identity;
+  depends on the landed portable install contract convergence
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
@@ -46,12 +49,14 @@ flowchart TD
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (proposed)"]
+    vendored_runtime_closure["vendored-runtime-closure (proposed)"]
     discovery_lifecycle_hardening --> edge_fingerprint_policy
     edge_fingerprint_policy --> landed_graph_transition_ownership
     edge_fingerprint_policy --> portable_install_contract_convergence
     edge_fingerprint_policy --> unified_offline_live_verification
     global_cwd_independent_cli --> transactional_land_command
     portable_install_contract_convergence --> always_valid_repository_settings
+    portable_install_contract_convergence --> vendored_runtime_closure
     secret_handling_guardrails --> global_cwd_independent_cli
     transactional_land_command --> discovery_lifecycle_hardening
 ```
