@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable
 from dataclasses import FrozenInstanceError
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import doc_contract.resolver as resolver_module
 from doc_contract.config import Settings
 from doc_contract.resolver import (
     Edge,
@@ -73,14 +75,27 @@ def test_discovery_defaults_to_tracked_and_declared_nodes(tmp_path: Path) -> Non
     root = tmp_path / "repo"
     _write(root, "docs/roadmap.md", _roadmap("tracked"))
     _write(root, "docs/changes/tracked/change.md", _change("tracked"))
+    _write(root, "docs/changes/tracked/tasks.md", "# Tracked tasks\n")
     _write(root, "docs/changes/provisional/change.md", _change("provisional"))
+    _write(root, "docs/changes/provisional/tasks.md", "# Provisional tasks\n")
     _git(root, "init", "-q")
-    _git(root, "add", "docs/roadmap.md", "docs/changes/tracked/change.md")
+    _git(
+        root,
+        "add",
+        "docs/roadmap.md",
+        "docs/changes/tracked/change.md",
+        "docs/changes/tracked/tasks.md",
+    )
 
     default = resolve(root, _settings(root))
     assert set(default.nodes) == {"roadmap", "tracked"}
     assert [(item.node_id, item.included) for item in default.discovery] == [
         ("provisional", False)
+    ]
+    assert [path.relative_to(root).as_posix() for path in default.document_paths] == [
+        "docs/changes/tracked/change.md",
+        "docs/changes/tracked/tasks.md",
+        "docs/roadmap.md",
     ]
 
     provisional = resolve(root, _settings(root), include_untracked=True)
@@ -88,6 +103,76 @@ def test_discovery_defaults_to_tracked_and_declared_nodes(tmp_path: Path) -> Non
     assert [(item.node_id, item.included) for item in provisional.discovery] == [
         ("provisional", True)
     ]
+    assert [path.relative_to(root).as_posix() for path in provisional.document_paths] == [
+        "docs/changes/provisional/change.md",
+        "docs/changes/provisional/tasks.md",
+        "docs/changes/tracked/change.md",
+        "docs/changes/tracked/tasks.md",
+        "docs/roadmap.md",
+    ]
+
+
+def test_secret_scanning_reuses_discovered_document_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap("tracked"))
+    _write(root, "docs/changes/tracked/change.md", _change("tracked"))
+    _write(root, "docs/changes/tracked/tasks.md", "# Tasks\n")
+    _write(root, "docs/generated/report.md", "API_KEY=generated-fixture\n")
+    _write(root, "src/config.py", "API_KEY=source-fixture\n")
+    _write(root, ".env", "API_KEY=env-fixture\n")
+    _write(root, "vendor/dependency/README.md", "API_KEY=vendor-fixture\n")
+    _write(root, "vendor/dependency/.git/HEAD", "ref: refs/heads/main\n")
+    _git(root, "init", "-q")
+    _git(root, "add", "docs", "src/config.py", ".env")
+
+    scanned_paths: tuple[Path, ...] = ()
+
+    def record_scan(
+        paths: Iterable[Path],
+        *,
+        root: Path | None = None,
+        secret_env_names: Iterable[str] = (),
+    ) -> list[object]:
+        nonlocal scanned_paths
+        scanned_paths = tuple(paths)
+        assert root == (tmp_path / "repo").resolve()
+        assert tuple(secret_env_names) == ()
+        return []
+
+    monkeypatch.setattr(resolver_module, "scan", record_scan)
+    result = resolver_module.resolve(root, _settings(root))
+
+    assert scanned_paths == result.document_paths
+    assert [path.relative_to(root).as_posix() for path in scanned_paths] == [
+        "docs/changes/tracked/change.md",
+        "docs/changes/tracked/tasks.md",
+        "docs/roadmap.md",
+    ]
+
+
+def test_secret_scanning_tracks_untracked_document_discovery(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    _write(
+        root,
+        "docs/changes/provisional/change.md",
+        _change("provisional") + "\nAPI_KEY=provisional-fixture\n",
+    )
+    _git(root, "init", "-q")
+    _git(root, "add", "docs/roadmap.md")
+
+    default = resolve(root, _settings(root))
+    assert not [finding for finding in default.errors if finding.code == "secret-detected"]
+
+    provisional = resolve(root, _settings(root), include_untracked=True)
+    secret_findings = [
+        finding for finding in provisional.errors if finding.code == "secret-detected"
+    ]
+    assert len(secret_findings) == 1
+    assert "docs/changes/provisional/change.md" in secret_findings[0].message
+    assert "provisional-fixture" not in secret_findings[0].message
 
 
 def test_resolver_fixture_cannot_construct_duplicate_root_paths(tmp_path: Path) -> None:

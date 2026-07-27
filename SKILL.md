@@ -128,14 +128,6 @@ add a dependency to the resolver. This is what lets the skill drop into an air-g
 
 ## Secret-handling guardrails
 
-The resolver also runs `doc_contract.secret_scan` over repository text files, including generated
-artifacts. It reports an `ERROR` with code `secret-detected` for credential-like assignments,
-known secret environment names, and every assignment in `.env` files. VCS metadata, virtualenvs,
-dependency/vendor caches, bytecode, and binary files are excluded; build and generated output is
-not excluded.
+The resolver passes the exact ordered result of managed-document discovery to `doc_contract.secret_scan`: existing declared roots, selected ADR/spec/change/archive documents, and companion Markdown inside selected change folders. It reports an `ERROR` with code `secret-detected` for credential-like assignments and known secret environment names in that set. Default tracked/declared and `--include-untracked` decisions therefore apply identically to graph validation and scanning. Source, `.env`, fixtures, generated output, dependency trees, and checked-out submodules are outside the scan unless a path is itself a selected managed document; repository-wide secret detection belongs to a dedicated security tool.
 
-Scanner findings are deliberately value-free. Diagnostics include only the relative path, line,
-normalized variable name, finding kind, and `present`/`length` metadata. Do not copy matched values
-into resolver output, reports, fixtures, handoffs, or change folders. A repository may extend the
-known environment-name set by passing `secret_env_names` to `scan_file`, `scan_tree`, or `scan`;
-store names, never their values.
+Scanner findings are deliberately value-free. Diagnostics include only the relative path, line, normalized variable name, finding kind, and `present`/`length` metadata. Do not copy matched values into resolver output, reports, fixtures, handoffs, or change folders. A repository may extend the known environment-name set by passing `secret_env_names` to `scan_file`, `scan_tree`, or `scan`; store names, never their values.

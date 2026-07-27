@@ -8,9 +8,8 @@ persistence: living
 
 ### `check`
 
-Resolve and validate the document graph, required repository boundary, frozen-document hashes, and value-free secret scan. The shared verification boundary runs the configured project capability command unless `--offline` is selected; target project modules are never imported into the resolver process.
-Discovery is tracked/declared by default. `--include-untracked` previews and includes provisional
-nodes, and warning output separates the tolerated baseline from newly introduced findings.
+Resolve and validate the document graph, required repository boundary, frozen-document hashes, and value-free secret scan. One ordered managed-document discovery result supplies both graph validation and scanning; repository source, `.env`, generated output, dependency trees, and checked-out submodules are not separate scan inputs. The shared verification boundary runs the configured project capability command unless `--offline` is selected; target project modules are never imported into the resolver process.
+Discovery is tracked/declared by default and includes companion Markdown inside selected change folders. `--include-untracked` previews and includes provisional nodes in both validation and scanning, and warning output separates the tolerated baseline from newly introduced findings.
 Dependency topology is mandatory; edge review hashes are advisory unless the manifest selects
 `edge_fingerprints = "required"`. Frozen-document `self_hash` validation is always strict.
 

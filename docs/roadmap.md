@@ -6,6 +6,7 @@ persistence: living
 
 ## Remediation
 
+- `docs/changes/archive/2026-07-27-reuse-document-discovery-for-secret-scanning/` (landed) — run document discovery once and feed its exact selected path set to both graph validation and value-free secret scanning; depends on the landed secret-handling and discovery changes
 - `docs/changes/archive/2026-07-23-secret-handling-guardrails/` (landed) — scanner and redacted
   diagnostics
 - `docs/changes/archive/2026-07-23-global-cwd-independent-cli/` (landed) — packaged resolver with an
@@ -46,11 +47,13 @@ flowchart TD
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
     landed_graph_transition_ownership["landed-graph-transition-ownership (landed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
+    reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
     vendored_runtime_closure["vendored-runtime-closure (landed)"]
     discovery_lifecycle_hardening --> edge_fingerprint_policy
+    discovery_lifecycle_hardening --> reuse_document_discovery_for_secret_scanning
     edge_fingerprint_policy --> landed_graph_transition_ownership
     edge_fingerprint_policy --> portable_install_contract_convergence
     edge_fingerprint_policy --> unified_offline_live_verification
@@ -58,6 +61,7 @@ flowchart TD
     portable_install_contract_convergence --> always_valid_repository_settings
     portable_install_contract_convergence --> vendored_runtime_closure
     secret_handling_guardrails --> global_cwd_independent_cli
+    secret_handling_guardrails --> reuse_document_discovery_for_secret_scanning
     transactional_land_command --> discovery_lifecycle_hardening
 ```
 <!-- END GENERATED DAG -->

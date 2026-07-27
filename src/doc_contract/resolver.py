@@ -70,7 +70,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from .config import Settings
-from .secret_scan import format_finding, scan_tree
+from .secret_scan import format_finding, scan
 
 # The repo being enforced + the managed-doc node set + the doc-tree layout are the per-project
 # parameters — they live in `config.py`, never hard-coded here (that is the invariant/parameter
@@ -282,6 +282,7 @@ class Resolution:
     findings: list[Finding]
     topo_order: list[str]
     discovery: tuple["DiscoveryRecord", ...] = ()
+    document_paths: tuple[Path, ...] = ()
 
     @property
     def errors(self) -> list[Finding]:
@@ -304,6 +305,7 @@ class DiscoveryResult:
     nodes: dict[str, Node]
     findings: tuple[Finding, ...]
     records: tuple[DiscoveryRecord, ...]
+    document_paths: tuple[Path, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +339,7 @@ class ProjectedResolution:
     findings: tuple[Finding, ...]
     topo_order: tuple[str, ...]
     discovery: tuple["DiscoveryRecord", ...]
+    document_paths: tuple[Path, ...]
 
     @property
     def errors(self) -> tuple[Finding, ...]:
@@ -409,6 +412,7 @@ def discover(
     nodes: dict[str, Node] = {}
     findings: list[Finding] = []
     records: list[DiscoveryRecord] = []
+    document_paths: set[Path] = set()
     tracked_paths = _tracked_paths(root)
 
     def add(node: Node) -> None:
@@ -449,6 +453,7 @@ def discover(
         if not path.exists():
             continue  # an absent managed doc is simply not a node (deletion is a separate concern)
         root_paths.add(path.resolve())
+        document_paths.add(path)
         fm = parse_front_matter(path.read_text(encoding="utf-8")) or {}
         persistence = _as_str(fm.get("persistence"))
         add(
@@ -474,6 +479,7 @@ def discover(
         node_id = f"adr-{m.group(1)}"
         if not include_candidate(node_id, adr):
             continue
+        document_paths.add(adr)
         fm = parse_front_matter(adr.read_text(encoding="utf-8")) or {}
         status = (_as_str(fm.get("status")) or "").split()[0] or None
         add(Node(node_id, "adr", adr, "frozen", status, None, [], [], None,
@@ -485,14 +491,19 @@ def discover(
             continue
         if not include_candidate(spec.stem, spec):
             continue
+        document_paths.add(spec)
         fm = parse_front_matter(spec.read_text(encoding="utf-8"))
         add(_node_from_change_like(root, spec.stem, "spec", spec, fm or {}))
 
     # change docs (active + archived) — only those carrying front-matter.
-    for doc in sorted(_doc_path(root, "changes").rglob("*.md")):
+    change_docs = sorted(_doc_path(root, "changes").rglob("*.md"))
+    companion_docs: list[Path] = []
+    managed_change_folders: set[Path] = set()
+    for doc in change_docs:
         text = doc.read_text(encoding="utf-8")
         raw, _ = split_front_matter(text)
         if raw is None:
+            companion_docs.append(doc)
             continue
         relative = doc.relative_to(root).as_posix()
         parse_before_filter = (
@@ -508,6 +519,8 @@ def discover(
             raise ValueError(f"change doc has front-matter without an `id`: {doc}")
         if not include_candidate(provisional_id, doc):
             continue
+        document_paths.add(doc)
+        managed_change_folders.add(doc.parent)
         if fm is None:
             fm = parse_front_matter(text)
             assert fm is not None
@@ -516,16 +529,28 @@ def discover(
             raise ValueError(f"change doc has front-matter without an `id`: {doc}")
         add(_node_from_change_like(root, nid, "change", doc, fm))
 
+    # Companion Markdown shares the owning change folder's managed boundary but is not a graph
+    # node. Reuse the rglob result above so secret scanning does not trigger another traversal.
+    for doc in companion_docs:
+        if not any(folder == doc.parent or folder in doc.parents for folder in managed_change_folders):
+            continue
+        relative = doc.relative_to(root).as_posix()
+        if tracked_paths is not None and relative not in tracked_paths and not include_untracked:
+            continue
+        document_paths.add(doc)
+
     # docs/archive/ lineage — frozen by directory; node-ified so nothing frozen is unguarded.
     for arc in sorted(_doc_path(root, "archive").glob("*.md")):
         if not include_candidate(f"archive-{arc.stem}", arc):
             continue
+        document_paths.add(arc)
         fm = parse_front_matter(arc.read_text(encoding="utf-8")) or {}
         nid = _as_str(fm.get("id")) or f"archive-{arc.stem}"
         add(Node(nid, "archive", arc, "frozen", None, None, [], [], None,
                  self_hash=_as_str(fm.get("self_hash"))))
 
-    return DiscoveryResult(nodes, tuple(findings), tuple(records))
+    ordered_paths = tuple(sorted(document_paths, key=lambda path: path.relative_to(root).as_posix()))
+    return DiscoveryResult(nodes, tuple(findings), tuple(records), ordered_paths)
 
 
 def discover_nodes(
@@ -930,8 +955,10 @@ def resolve(
     )
     findings.extend(
         Finding("ERROR", "secret-detected", format_finding(secret))
-        for secret in scan_tree(
-            root, secret_env_names=settings.additional_environment_names
+        for secret in scan(
+            discovery.document_paths,
+            root=root,
+            secret_env_names=settings.additional_environment_names,
         )
     )
     return Resolution(
@@ -939,6 +966,7 @@ def resolve(
         findings=findings,
         topo_order=order,
         discovery=discovery.records,
+        document_paths=discovery.document_paths,
     )
 
 
@@ -1035,6 +1063,7 @@ def _projected_resolution(result: Resolution) -> ProjectedResolution:
         findings=tuple(result.findings),
         topo_order=tuple(result.topo_order),
         discovery=tuple(result.discovery),
+        document_paths=tuple(result.document_paths),
     )
 
 
@@ -1096,6 +1125,7 @@ def project_landing(
         findings=findings,
         topo_order=order,
         discovery=result.discovery,
+        document_paths=result.document_paths,
     )
     return LandingProjection(
         change_document=ProjectedDocument(archive_path, change_text),

@@ -57,13 +57,19 @@ def test_exclusions_cover_vcs_caches_bytecode_and_binary_files(tmp_path: Path) -
     assert scan_tree(tmp_path) == []
 
 
-def test_resolver_fails_on_secret_and_printed_finding_has_no_value(tmp_path: Path) -> None:
-    _write(tmp_path, "docs/roadmap.md", "---\npersistence: living\n---\n# roadmap\n")
+def test_resolver_scans_discovered_documents_only(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "docs/roadmap.md",
+        "---\npersistence: living\n---\n# roadmap\n\nOPENAI_API_KEY=managed-fixture\n",
+    )
     _write(tmp_path, "generated/report.txt", "OPENAI_API_KEY=sk-generated-fixture\n")
 
     result = resolve(tmp_path)
     secret_findings = [finding for finding in result.errors if finding.code == "secret-detected"]
     assert len(secret_findings) == 1
+    assert "docs/roadmap.md" in secret_findings[0].message
+    assert "managed-fixture" not in secret_findings[0].message
     assert "sk-generated-fixture" not in secret_findings[0].message
     assert "OPENAI_API_KEY" in secret_findings[0].message
 

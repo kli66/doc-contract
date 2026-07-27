@@ -46,6 +46,8 @@ default; only IDs explicitly listed in `optional_roots` may be absent, and their
 reported. `docs/archive/` lineage is node-ified too (frozen, `self_hash`-guarded), so no managed doc
 sits outside the node set.
 
+The same discovery result bounds value-free secret scanning. Existing declared roots, selected managed documents, and companion Markdown inside selected change folders are scanned; application source, `.env`, generated output, dependency trees, and checked-out submodules are not scanned merely because they exist below the repository root. Use a dedicated security tool for repository-wide secret detection.
+
 ## What makes this cheap
 
 Every doc carries four attributes; the maintenance model falls out of them:

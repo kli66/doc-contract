@@ -124,13 +124,7 @@ doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --inc
 doc-contract land docs/changes/example --repo-root /path/to/repo
 ```
 
-Discovery includes Git-tracked documents plus declared roots by default. `--include-untracked`
-previews provisional node IDs and paths before `update` or `land` mutates anything; without it,
-untracked candidates are reported and excluded. `check` is read-only and labels tolerated baseline
-warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap
-block after validation. `stamp` records or refreshes reviewed edge metadata even in advisory mode
-and refreshes strict frozen `self_hash` values. `sync` reconciles the complete vendored package and
-pin manifest, including removing stale generated runtime files, without rewriting current files.
+Discovery includes Git-tracked managed documents plus declared roots by default, including companion Markdown inside selected change folders. The resolver uses that one ordered path set for both graph validation and value-free secret scanning. Source, `.env`, generated output, dependency trees, and checked-out submodules are not scanned merely because they are below the repository root; use a dedicated security tool for repository-wide secret detection. `--include-untracked` previews provisional node IDs and paths before `update` or `land` mutates anything; without it, untracked candidates are reported and excluded from both validation and scanning. `check` is read-only and labels tolerated baseline warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap block after validation. `stamp` records or refreshes reviewed edge metadata even in advisory mode and refreshes strict frozen `self_hash` values. `sync` reconciles the complete vendored package and pin manifest, including removing stale generated runtime files, without rewriting current files.
 `land` previews and then atomically applies the status, dependent fingerprints, roadmap, and archive
 move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
 returns success without changing files or the Git index. Interrupted landings resume from the
