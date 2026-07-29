@@ -4,15 +4,10 @@ from __future__ import annotations
 
 import datetime as _datetime
 import difflib
-import hashlib
-import json
-import os
 import re
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable
 
 from .config import Settings
 from .resolver import (
@@ -20,59 +15,32 @@ from .resolver import (
     DAG_END,
     Finding,
     parse_front_matter,
+    locate_change,
     project_landing,
     resolve,
 )
+from .transaction import (
+    ConcurrentModification,
+    InjectedInterruption,
+    Mutation,
+    TrackingMode,
+    TransactionError,
+    execute_mutations,
+    file_hash as _file_hash,
+    git_metadata_path,
+    load_journal,
+    optional_str as _optional_str,
+    required_str as _required_str,
+    save_journal as _save_journal,
+    sha as _sha,
+    tracking_mode as _tracking_mode,
+    tree_hash as _tree_hash,
+    tree_hash_with as _tree_hash_with,
+)
 from .verification import VerificationOutcome, VerificationPolicy, WarningDelta, verify
 
-TrackingMode = Literal["tracked", "untracked"]
 JOURNAL_SCHEMA = 2
-
-
-class LandingError(RuntimeError):
-    """A deterministic, value-free landing failure."""
-
-
-class ConcurrentModification(LandingError):
-    pass
-
-
-class InjectedInterruption(LandingError):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Mutation:
-    kind: Literal["write", "move"]
-    path: str
-    destination: str | None
-    before_hash: str
-    after_hash: str
-    content: str | None = None
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "kind": self.kind,
-            "path": self.path,
-            "destination": self.destination,
-            "before_hash": self.before_hash,
-            "after_hash": self.after_hash,
-            "content": self.content,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, object]) -> "Mutation":
-        kind = raw.get("kind")
-        if kind not in {"write", "move"}:
-            raise LandingError("journal-invalid: unknown mutation kind")
-        return cls(
-            kind=kind,
-            path=_required_str(raw, "path"),
-            destination=_optional_str(raw.get("destination")),
-            before_hash=_required_str(raw, "before_hash"),
-            after_hash=_required_str(raw, "after_hash"),
-            content=_optional_str(raw.get("content")),
-        )
+LandingError = TransactionError
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,116 +146,11 @@ class LandingOutcome:
         return self.verification.warning_report
 
 
-def _required_str(raw: dict[str, object], key: str) -> str:
-    value = raw.get(key)
-    if not isinstance(value, str) or not value:
-        raise LandingError(f"journal-invalid: missing {key}")
-    return value
-
-
-def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _file_hash(path: Path) -> str:
-    try:
-        return _sha(path.read_bytes())
-    except OSError as exc:
-        raise LandingError(f"input-unavailable: {type(exc).__name__}") from None
-
-
-def _tree_files(path: Path) -> list[Path]:
-    if not path.is_dir():
-        return []
-    files: list[Path] = []
-    for item in sorted(path.rglob("*")):
-        if item.is_symlink() or not item.is_file():
-            raise LandingError("source-tree-invalid: only regular files are supported")
-        files.append(item)
-    return files
-
-
-def _tree_hash(path: Path) -> str:
-    digest = hashlib.sha256()
-    for item in _tree_files(path):
-        digest.update(item.relative_to(path).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(_file_hash(item).encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
-
-
-def _tree_hash_with(path: Path, overrides: dict[str, bytes]) -> str:
-    digest = hashlib.sha256()
-    names = {item.relative_to(path).as_posix() for item in _tree_files(path)} | set(overrides)
-    for name in sorted(names):
-        data = overrides.get(name)
-        if data is None:
-            data = (path / name).read_bytes()
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(_sha(data).encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
-
-
 def _git_path(root: Path, change_id: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "-", change_id)
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--git-path", f"doc-contract/land-{safe}.json"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        raise LandingError("repo-not-git: landing requires a Git worktree") from None
-    path = Path(result.stdout.strip())
-    return path if path.is_absolute() else root / path
-
-
-def _tracking_mode(root: Path, source: Path) -> TrackingMode:
-    relative = source.relative_to(root).as_posix()
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--full-name", "-z", "--", relative],
-            check=True,
-            capture_output=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        raise LandingError("tracking-state-unavailable: cannot inspect Git index") from None
-    tracked = {item for item in result.stdout.decode("utf-8").split("\0") if item}
-    files = {item.relative_to(root).as_posix() for item in _tree_files(source)}
-    if tracked and tracked != files:
-        raise LandingError("partial-tracking: change folder is neither fully tracked nor untracked")
-    if tracked:
-        return "tracked"
-    return "untracked"
-
-
-def _locate_source(root: Path, ref: str, nodes: dict[str, object]) -> tuple[str, Path]:
-    candidate = Path(ref)
-    if candidate.parts and candidate.parts[0] == "docs":
-        path = (root / candidate).resolve()
-        if not path.is_dir() or root not in path.parents or "changes" not in path.relative_to(root).parts:
-            raise LandingError("change-not-found: ref is not an active change folder")
-        docs = sorted(path.glob("*.md"))
-        for doc in docs:
-            fm = parse_front_matter(doc.read_text(encoding="utf-8")) or {}
-            raw_change_id = fm.get("id")
-            change_id = raw_change_id if isinstance(raw_change_id, str) else None
-            node = nodes.get(change_id) if change_id else None
-            if change_id and node is not None and getattr(node, "active", False):
-                return change_id, path
-        raise LandingError("change-not-found: folder has no resolvable change id")
-    node = nodes.get(ref)
-    if node is None or getattr(node, "kind", None) != "change" or not getattr(node, "active", False):
-        raise LandingError("change-not-found: ref is not an active change")
-    return ref, getattr(node, "path").parent
+    return git_metadata_path(
+        root, f"doc-contract/land-{safe}.json", operation="landing"
+    )
 
 
 def _roadmap_prose_output(text: str, source: str, archive: str) -> str:
@@ -347,7 +210,17 @@ def plan_landing(
         raise LandingError(
             "untracked-change-excluded: rerun with --include-untracked to preview it"
         )
-    change_id, source = _locate_source(root, ref, result.nodes)
+    try:
+        change_id, source = locate_change(root, ref, result.nodes)
+    except ValueError as exc:
+        raise LandingError(str(exc)) from None
+    status = result.nodes[change_id].status
+    if status != "in-progress":
+        if status == "blocked":
+            raise LandingError(f"blocked-change: land refuses blocked change {change_id}")
+        raise LandingError(
+            f"lifecycle-ineligible: land requires in-progress; {change_id} is {status}"
+        )
     source_rel = source.relative_to(root).as_posix()
     day = date or _datetime.date.today().isoformat()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
@@ -430,91 +303,8 @@ def plan_landing(
     )
 
 
-def _journal_payload(plan: LandingPlan, completed: list[int]) -> dict[str, object]:
-    payload = plan.as_dict()
-    payload["completed"] = completed
-    return payload
-
-
-def _save_journal(path: Path, plan: LandingPlan, completed: list[int]) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = (
-            json.dumps(_journal_payload(plan, completed), indent=2, sort_keys=True) + "\n"
-        ).encode()
-        fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary_name, path)
-        finally:
-            if os.path.exists(temporary_name):
-                os.unlink(temporary_name)
-    except OSError as exc:
-        raise LandingError(f"journal-unavailable: {type(exc).__name__}") from None
-
-
 def _load_journal(path: Path) -> tuple[LandingPlan, list[int]]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        plan = LandingPlan.from_dict(raw)
-        completed = raw.get("completed", [])
-        if not isinstance(completed, list) or not all(isinstance(item, int) for item in completed):
-            raise LandingError("journal-invalid: completed boundaries are malformed")
-        return plan, completed
-    except (OSError, json.JSONDecodeError) as exc:
-        raise LandingError(f"journal-invalid: {type(exc).__name__}") from None
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
-
-
-def _apply_mutation(root: Path, plan: LandingPlan, mutation: Mutation) -> None:
-    path = root / mutation.path
-    if mutation.kind == "write":
-        current = _file_hash(path)
-        if current == mutation.after_hash:
-            return
-        if current != mutation.before_hash or mutation.content is None:
-            raise ConcurrentModification(f"concurrent-modification: {mutation.path}")
-        _atomic_write(path, mutation.content)
-        return
-    destination = root / (mutation.destination or "")
-    source_present = path.exists()
-    destination_present = destination.exists()
-    if not source_present and destination_present and _tree_hash(destination) == mutation.after_hash:
-        return
-    if source_present and destination_present:
-        raise LandingError("destination-collision: source and archive both exist")
-    if not source_present:
-        raise ConcurrentModification(f"concurrent-modification: missing source {mutation.path}")
-    if _tree_hash(path) != mutation.before_hash:
-        raise ConcurrentModification(f"concurrent-modification: source tree {mutation.path}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if plan.tracking == "tracked":
-        try:
-            subprocess.run(
-                ["git", "-C", str(root), "mv", "--", mutation.path, mutation.destination or ""],
-                check=True,
-                capture_output=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            raise LandingError("git-move-failed: tracked change could not be archived") from None
-    else:
-        os.replace(path, destination)
+    return load_journal(path, LandingPlan.from_dict)
 
 
 def _find_completed(root: Path, change_id: str) -> bool:
@@ -587,17 +377,14 @@ def execute_landing(
         on_plan(plan)
     if dry_run:
         return LandingOutcome(plan, False)
-    if not journal_path.is_file():
-        _save_journal(journal_path, plan, completed)
-    for index, mutation in enumerate(plan.mutations):
-        if index in completed:
-            continue
-        _apply_mutation(root, plan, mutation)
-        completed.append(index)
-        completed.sort()
-        _save_journal(journal_path, plan, completed)
-        if fault_after is not None and len(completed) >= fault_after:
-            raise InjectedInterruption("injected-interruption")
+    execute_mutations(
+        root,
+        plan,
+        journal_path,
+        completed,
+        fault_after=fault_after,
+        save=_save_journal,
+    )
     final = resolve(root, settings, include_untracked=include_untracked)
     verification = verify(
         final,

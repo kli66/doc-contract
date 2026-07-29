@@ -6,7 +6,9 @@ This sub-command is the missing other half: turning a raw intent into a well-for
 is *ready* to dispatch.
 
 **This authors; it does not execute.** It stops at a `Status: Proposed (not accepted)` folder for
-review. Lifecycle: `/doc-contract new-change <intent>` → accept → "Execute `docs/changes/<name>/`".
+review. An explicit user or reviewer instruction authorizes `doc-contract accept`; lifecycle:
+`/doc-contract new-change <intent>` → explicit acceptance → `doc-contract accept` → entry
+reconciliation → `doc-contract begin` → "Execute `docs/changes/<name>/`".
 Do **not** touch `src/` or write tests here — only `docs/`.
 
 The template below is the cheap part. The value is **steps 1 and 4**: grounding the metadata block and

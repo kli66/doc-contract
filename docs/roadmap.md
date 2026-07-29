@@ -28,7 +28,7 @@ persistence: living
 
 ## Architecture
 
-- `docs/changes/accepted-change-state/` (proposed) — add explicit `accepted`, `accept`, and `begin` transitions, reusable transactional lifecycle planning, and in-progress-only landing; depends on the landed transaction and graph-projection boundaries
+- `docs/changes/archive/2026-07-29-accepted-change-state/` (landed) — add explicit `accepted`, `accept`, and `begin` transitions, reusable transactional lifecycle planning, and in-progress-only landing; depends on the landed transaction and graph-projection boundaries
 - `docs/changes/archive/2026-07-24-landed-graph-transition-ownership/` (landed) — move projected landed document
   state, topology, roadmap rendering, and validation behind one resolver-owned operation; depends on
   the landed edge-fingerprint policy
@@ -49,7 +49,7 @@ persistence: living
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
 flowchart TD
-    accepted_change_state["accepted-change-state (proposed)"]
+    accepted_change_state["accepted-change-state (landed)"]
     actionable_lifecycle_diagnostics["actionable-lifecycle-diagnostics (proposed)"]
     always_valid_repository_settings["always-valid-repository-settings (landed)"]
     concise_landing_output["concise-landing-output (proposed)"]

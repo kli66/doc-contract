@@ -664,4 +664,4 @@ def test_packaged_sync_produces_vendored_verification_from_unrelated_cwd(
 
 
 def test_capability_surface_is_explicit() -> None:
-    assert COMMANDS == {"check", "update", "stamp", "sync", "land"}
+    assert COMMANDS == {"check", "update", "stamp", "sync", "accept", "begin", "land"}

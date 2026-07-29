@@ -23,6 +23,18 @@ With `--include-untracked`, print the provisional node preview before writing th
 Record or refresh one active node's dependency fingerprints, including under advisory policy, or
 refresh one frozen node's strict `self_hash` after review.
 
+### `accept`
+
+Record explicit user or reviewer authorization by transitioning one proposed change to `accepted`.
+The command never infers authority, does not accept blocked work, and is idempotent when already
+accepted. `--dry-run` and `--include-untracked` use the immutable lifecycle plan boundary.
+
+### `begin`
+
+Start work on one accepted change by transitioning it to `in-progress`, preserving an existing
+`accepted_at` date and recording `started_at`. It refuses proposed, blocked, and landed changes,
+is idempotent when already in progress, and never runs the target capability subprocess.
+
 ### `sync`
 
 Vendor the complete running package into `.doc-contract/vendor/` and write a deterministic
@@ -34,6 +46,10 @@ and repeating the command without a package change does not rewrite files.
 ### `land`
 
 Plan and apply a hash-guarded, resumable change landing. It previews the complete write/move set with `--dry-run`, journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`; the plan prints those nodes before mutation, and the outcome reports baseline, new, and resolved warning counts. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op.
+
+The supported lifecycle is author → explicit user/reviewer acceptance → `accept` → entry
+reconciliation → `begin` → work → exit reconciliation → `land`. Deterministic transitions do not
+claim semantic judgment; blocked changes remain under their existing manual process.
 
 ## Verification matrix
 

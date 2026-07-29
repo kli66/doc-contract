@@ -1,7 +1,7 @@
 ---
 id: accepted-change-state
 persistence: ephemeral
-status: proposed
+status: landed
 track: architecture
 depends_on:
   - transactional-land-command
@@ -27,10 +27,14 @@ files_owned:
   - README.md
   - SKILL.md
   - docs/roadmap.md
+accepted_at: 2026-07-29
+started_at: 2026-07-29
+landed_at: 2026-07-29
+archive_path: docs/changes/archive/2026-07-29-accepted-change-state
 ---
 # Add an accepted change state and explicit lifecycle transitions
 
-Status: Proposed (not accepted) · Proposed 2026-07-28
+Status: Landed · 2026-07-29
 
 **Upstream dependencies:** `transactional-land-command` is landed and supplies the existing
 hash-guarded, journaled, resumable multi-file mutation boundary. `landed-graph-transition-ownership`

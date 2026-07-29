@@ -25,6 +25,8 @@ Invoke as `/doc-contract <sub-command> [args]`. The first token selects the oper
 | `/doc-contract new-change <intent>` | Author a well-formed `docs/changes/<name>/` folder from a raw intent, grounded in the ADRs + roadmap + code, stopping at `Proposed`. **Read and follow `guides/new-change.md`.** |
 | `/doc-contract reconcile <folder> [entry\|exit]` | The MANDATORY entry/exit drift-check against the ADRs + roadmap. **Read and follow `guides/reconcile.md`.** |
 | `/doc-contract land <folder> [--dry-run]` | Apply the transactional landing boundary after reconciliation: status, roadmap, fingerprints, journaling, and archive movement. Preview first. |
+| `/doc-contract accept CHANGE [--dry-run] [--include-untracked]` | Record explicit user/reviewer acceptance |
+| `/doc-contract begin CHANGE [--dry-run] [--include-untracked]` | Start work on an accepted change |
 | `/doc-contract install` | Materialize the skill into another repo. See **Install into a new repo** below. |
 
 If no sub-command is given, infer intent from the request (a raw intent to build → `new-change`;
@@ -80,6 +82,8 @@ doc-contract check --repo-root /path/to/repo --offline --include-untracked
 # regenerate the roadmap's Mermaid DAG block in place
 doc-contract update --repo-root /path/to/repo
 doc-contract update --repo-root /path/to/repo --include-untracked
+doc-contract accept docs/changes/<name> --repo-root /path/to/repo --dry-run
+doc-contract begin docs/changes/<name> --repo-root /path/to/repo --dry-run
 doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run
 doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/<name> --repo-root /path/to/repo

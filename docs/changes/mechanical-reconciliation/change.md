@@ -23,6 +23,8 @@ files_owned:
   - AGENTS.template.md
   - guides/reconcile.md
   - docs/roadmap.md
+fingerprints:
+  accepted-change-state: 32bc0f5591be9c6c
 ---
 # Add deterministic mechanical reconciliation
 

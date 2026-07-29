@@ -48,15 +48,15 @@ def _repo(tmp_path: Path, *, capability: str | None = None) -> Path:
         root,
         "docs/roadmap.md",
         "---\npersistence: living\n---\n# Roadmap\n\n"
-        "- `docs/changes/transactional/` (proposed)\n\n"
+        "- `docs/changes/transactional/` (in-progress)\n\n"
         "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
         "```mermaid\nflowchart TD\n```\n<!-- END GENERATED DAG -->\n",
     )
     _write(
         root,
         "docs/changes/transactional/change.md",
-        "---\nid: transactional\npersistence: ephemeral\nstatus: proposed\ntrack: test\n---\n"
-        "# Transactional\n\nStatus: Proposed (not accepted) · Proposed 2026-07-23\n\n## Tasks\n\n"
+        "---\nid: transactional\npersistence: ephemeral\nstatus: in-progress\ntrack: test\n---\n"
+        "# Transactional\n\nStatus: In progress · Started 2026-07-23\n\n## Tasks\n\n"
         "1. Implement it\n",
     )
     _git(root, "init", "-q")
@@ -192,7 +192,75 @@ def test_partial_tracking_is_rejected(tmp_path: Path) -> None:
         plan_landing(root, _settings(root), "transactional", date="2026-07-23")
 
 
+@pytest.mark.parametrize("status", ["proposed", "accepted", "blocked"])
+def test_landing_requires_in_progress_status(tmp_path: Path, status: str) -> None:
+    root = _repo(tmp_path)
+    change = root / "docs/changes/transactional/change.md"
+    change.write_text(
+        change.read_text(encoding="utf-8").replace("status: in-progress", f"status: {status}"),
+        encoding="utf-8",
+    )
+    roadmap = root / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8").replace("(in-progress)", f"({status})"),
+        encoding="utf-8",
+    )
+    expected = "blocked-change" if status == "blocked" else "lifecycle-ineligible"
+    with pytest.raises(LandingError, match=expected):
+        plan_landing(root, _settings(root), "transactional", date="2026-07-23", include_untracked=True)
+
+
 def test_interruption_resumes_at_mutation_boundary(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    with pytest.raises(InjectedInterruption):
+        execute_landing(
+            root,
+            _settings(root),
+            "transactional",
+            date="2026-07-23",
+            include_untracked=True,
+            fault_after=3,
+        )
+    assert (root / "docs/changes/archive/2026-07-23-transactional/change.md").is_file()
+    outcome = execute_landing(
+        root,
+        _settings(root),
+        "transactional",
+        date="2026-07-23",
+        include_untracked=True,
+    )
+    assert not [finding for finding in outcome.final_findings if finding.level == "ERROR"]
+    assert (root / "docs/changes/archive/2026-07-23-transactional/change.md").is_file()
+
+
+def test_landing_resume_rejects_edit_to_completed_move_boundary(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    with pytest.raises(InjectedInterruption):
+        execute_landing(
+            root,
+            _settings(root),
+            "transactional",
+            date="2026-07-23",
+            include_untracked=True,
+            fault_after=3,
+        )
+    archive = root / "docs/changes/archive/2026-07-23-transactional/change.md"
+    archive.write_text(
+        archive.read_text(encoding="utf-8") + "\nEdited after journal\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConcurrentModification, match="completed boundary"):
+        execute_landing(
+            root,
+            _settings(root),
+            "transactional",
+            date="2026-07-23",
+            include_untracked=True,
+        )
+    assert list((root / ".git").glob("doc-contract/land-*.json"))
+
+
+def test_landing_resume_rejects_edit_to_completed_boundary(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     with pytest.raises(InjectedInterruption):
         execute_landing(
@@ -203,16 +271,17 @@ def test_interruption_resumes_at_mutation_boundary(tmp_path: Path) -> None:
             include_untracked=True,
             fault_after=1,
         )
-    assert (root / "docs/changes/transactional/change.md").is_file()
-    outcome = execute_landing(
-        root,
-        _settings(root),
-        "transactional",
-        date="2026-07-23",
-        include_untracked=True,
-    )
-    assert not [finding for finding in outcome.final_findings if finding.level == "ERROR"]
-    assert (root / "docs/changes/archive/2026-07-23-transactional/change.md").is_file()
+    source = root / "docs/changes/transactional/change.md"
+    source.write_text(source.read_text(encoding="utf-8") + "\nEdited after journal\n", encoding="utf-8")
+    with pytest.raises(ConcurrentModification, match="completed boundary"):
+        execute_landing(
+            root,
+            _settings(root),
+            "transactional",
+            date="2026-07-23",
+            include_untracked=True,
+        )
+    assert list((root / ".git").glob("doc-contract/land-*.json"))
 
 
 def test_concurrent_change_fails_without_overwrite(tmp_path: Path) -> None:

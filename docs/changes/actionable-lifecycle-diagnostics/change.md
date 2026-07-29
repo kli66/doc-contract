@@ -21,6 +21,8 @@ files_owned:
   - docs/spec/capabilities.md
   - README.md
   - docs/roadmap.md
+fingerprints:
+  accepted-change-state: 32bc0f5591be9c6c
 ---
 # Make lifecycle diagnostics stable and actionable
 

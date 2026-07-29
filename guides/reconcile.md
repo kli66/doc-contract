@@ -14,8 +14,9 @@ neither of which is a procedure. (2) It reconciles *linkage and consistency*, ne
 correctness* — it cannot tell you the roadmap's schedule is *wise*, only that it *matches* the change
 and the ADRs.
 
-Lifecycle context: `/doc-contract new-change` authors → accept → **`/doc-contract reconcile … entry`**
-→ you do the work → **`/doc-contract reconcile … exit`** → archive.
+Lifecycle context: `/doc-contract new-change` authors → explicit user/reviewer instruction →
+`doc-contract accept` → **`/doc-contract reconcile … entry`** → `doc-contract begin` → you do the
+work → **`/doc-contract reconcile … exit`** → archive. Reconciliation never decides acceptance.
 
 Pass the change folder and the phase. If the phase is omitted, infer it — an un-archived folder you
 are about to work in is `entry`; a folder whose tasks are done and you are landing is `exit`.

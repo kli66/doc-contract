@@ -77,7 +77,8 @@ from .secret_scan import format_finding, scan
 # split this module's portability rests on). `dag.py` + `doc_tripwire.py` are copied verbatim
 # between repos; only `config.py` changes.
 PERSISTENCE_CLASSES = frozenset({"frozen", "living", "ephemeral", "deferred"})
-ACTIVE_STATUSES = frozenset({"proposed", "in-progress", "blocked"})
+CHANGE_STATUSES = frozenset({"proposed", "accepted", "in-progress", "blocked", "landed"})
+ACTIVE_STATUSES = frozenset({"proposed", "accepted", "in-progress", "blocked"})
 
 DAG_BEGIN = "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->"
 DAG_BEGIN_PREFIX = "<!-- BEGIN GENERATED DAG"
@@ -88,6 +89,9 @@ DAG_END = "<!-- END GENERATED DAG -->"
 _STATUS_TOKENS: tuple[tuple[str, str], ...] = (
     ("(blocked", "blocked"),
     ("blocked on", "blocked"),
+    ("(in-progress", "in-progress"),
+    ("in progress", "in-progress"),
+    ("(accepted", "accepted"),
     ("(proposed", "proposed"),
     ("proposed 20", "proposed"),
 )
@@ -356,6 +360,23 @@ class LandingProjection:
     dependent_documents: tuple[ProjectedDocument, ...]
     resolution: ProjectedResolution
     roadmap_block: str
+
+    @property
+    def findings(self) -> tuple[Finding, ...]:
+        return self.resolution.findings
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionProjection:
+    change_document: ProjectedDocument
+    dependent_documents: tuple[ProjectedDocument, ...]
+    resolution: ProjectedResolution
+    roadmap_block: str
+    roadmap_text: str
+    source_status: str
+    destination_status: str
+    accepted_at: str | None
+    started_at: str | None
 
     @property
     def findings(self) -> tuple[Finding, ...]:
@@ -639,6 +660,26 @@ def _roadmap_text(root: Path, settings: Settings) -> str:
 _GENERIC_DOCS = frozenset({"change.md", "proposal.md", "design.md", "tasks.md"})
 
 
+def locate_change(root: Path, ref: str, nodes: Mapping[str, Node]) -> tuple[str, Path]:
+    """Resolve a change ID or repository-relative change folder to its source folder."""
+    candidate = Path(ref)
+    if candidate.parts and candidate.parts[0] == "docs":
+        path = (root / candidate).resolve()
+        if not path.is_dir() or root not in path.parents or "changes" not in path.relative_to(root).parts:
+            raise ValueError("change-not-found: ref is not an active change folder")
+        for doc in sorted(path.glob("*.md")):
+            values = parse_front_matter(doc.read_text(encoding="utf-8")) or {}
+            change_id = _as_str(values.get("id"))
+            node = nodes.get(change_id) if change_id else None
+            if change_id and node is not None and node.active:
+                return change_id, path
+        raise ValueError("change-not-found: folder has no resolvable change id")
+    node = nodes.get(ref)
+    if node is None or node.kind != "change" or not node.active:
+        raise ValueError("change-not-found: ref is not an active change")
+    return ref, node.path.parent
+
+
 def _specific_needle(node: Node) -> str:
     """The string that identifies *this* node in the roadmap: its own basename when the folder
     holds several node-docs (the `fix-*.md` case), else the folder dir-path (when the doc is a
@@ -781,6 +822,19 @@ def validate(
                     "bad-persistence",
                     f"{n.id} persistence={n.persistence!r} "
                     f"not one of {sorted(PERSISTENCE_CLASSES)}",
+                )
+            )
+
+    # Change lifecycle is a closed machine-readable set. Missing/unknown values fail closed;
+    # archived lineage remains valid through the terminal `landed` state.
+    for n in sorted(nodes.values(), key=lambda x: x.id):
+        if n.kind == "change" and n.status not in CHANGE_STATUSES:
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "unknown-change-status",
+                    f"{n.id} has unsupported change status {n.status!r}; "
+                    f"expected one of {sorted(CHANGE_STATUSES)}",
                 )
             )
 
@@ -1035,10 +1089,75 @@ def _refreshed_dependent_text(text: str, change_id: str, target_hash: str) -> st
     return _render_front_matter(values, body)
 
 
+def _transition_change_text(
+    text: str,
+    *,
+    action: str,
+    transition_date: str,
+) -> tuple[str, str | None, str | None]:
+    values = parse_front_matter(text)
+    if values is None:
+        raise ValueError("change-invalid: missing front matter")
+    accepted_at = _as_str(values.get("accepted_at"))
+    started_at = _as_str(values.get("started_at"))
+    _, body = split_front_matter(text)
+    if action == "accept":
+        values["status"] = "accepted"
+        values["accepted_at"] = transition_date
+        accepted_at = transition_date
+        body_line = f"Status: Accepted · Accepted {transition_date}"
+    elif action == "begin":
+        values["status"] = "in-progress"
+        values["started_at"] = transition_date
+        started_at = transition_date
+        body_line = f"Status: In progress · Started {transition_date}"
+        if accepted_at is not None:
+            body_line = f"Status: In progress · Accepted {accepted_at} · Started {transition_date}"
+    else:
+        raise ValueError(f"transition-invalid: unsupported action {action!r}")
+    body = re.sub(r"^Status:.*$", body_line, body, count=1, flags=re.MULTILINE)
+    return _render_front_matter(values, body), accepted_at, started_at
+
+
 def _without_generated_roadmap(text: str) -> str:
     if DAG_BEGIN_PREFIX in text and DAG_END in text:
         return text[: text.index(DAG_BEGIN_PREFIX)] + text[text.index(DAG_END) + len(DAG_END) :]
     return text
+
+
+def _roadmap_transition_text(
+    text: str,
+    *,
+    node: Node,
+    destination_status: str,
+    change_dirs: set[str],
+) -> str:
+    if DAG_BEGIN_PREFIX not in text or DAG_END not in text:
+        raise ValueError("roadmap-invalid: generated DAG markers are missing")
+    own_dir = f"docs/changes/{node.path.parent.name}/"
+    specific = _specific_needle(node).lower()
+    lines = text.splitlines(keepends=True)
+    matched = False
+    for index, line in enumerate(lines):
+        low = line.lower()
+        if specific not in low or any(
+            other.lower() in low for other in change_dirs - {own_dir}
+        ):
+            continue
+        if DAG_BEGIN_PREFIX in line:
+            continue
+        lines[index] = re.sub(
+            r"\((?:proposed|accepted|in-progress|blocked)\)",
+            f"({destination_status})",
+            line,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        matched = True
+        break
+    if not matched:
+        raise ValueError(f"roadmap-invalid: no roadmap line for {node.id}")
+    return "".join(lines)
 
 
 def _projected_resolution(result: Resolution) -> ProjectedResolution:
@@ -1132,6 +1251,94 @@ def project_landing(
         dependent_documents=tuple(dependent_documents),
         resolution=_projected_resolution(transitioned),
         roadmap_block=render_block(transitioned),
+    )
+
+
+def project_transition(
+    root: Path,
+    settings: Settings,
+    result: Resolution,
+    *,
+    change_id: str,
+    action: str,
+    transition_date: str,
+    planned_roadmap_text: str | None = None,
+) -> TransitionProjection:
+    """Project an explicit accept/begin transition without mutating the input resolution."""
+    nodes = copy.deepcopy(result.nodes)
+    try:
+        change = nodes[change_id]
+    except KeyError:
+        raise ValueError(f"change-invalid: unknown change id {change_id!r}") from None
+    if change.kind != "change" or not change.path.is_file():
+        raise ValueError(f"change-invalid: unknown change id {change_id!r}")
+    old_status = change.status
+    if old_status is None:
+        raise ValueError(f"change-status-invalid: {change_id} has no status")
+    destination = {"accept": "accepted", "begin": "in-progress"}.get(action)
+    if destination is None:
+        raise ValueError(f"transition-invalid: unsupported action {action!r}")
+    new_text, accepted_at, started_at = _transition_change_text(
+        change.path.read_text(encoding="utf-8"), action=action, transition_date=transition_date
+    )
+    target_hash = fingerprint(new_text)
+    change.status = destination
+    dependent_documents: list[ProjectedDocument] = []
+    for node in sorted(nodes.values(), key=lambda item: item.id):
+        node.dependents.clear()
+        if not node.active or not any(edge.target == change_id for edge in node.depends_on):
+            continue
+        node.depends_on = [
+            Edge(edge.target, target_hash, edge.requires_status)
+            if edge.target == change_id
+            else edge
+            for edge in node.depends_on
+        ]
+        if node.path.is_file():
+            dependent_documents.append(
+                ProjectedDocument(
+                    node.path,
+                    _refreshed_dependent_text(
+                        node.path.read_text(encoding="utf-8"), change_id, target_hash
+                    ),
+                )
+            )
+    _compute_dependents(nodes)
+    order, cycle = _topo_sort(nodes)
+    roadmap = planned_roadmap_text or (root / settings.roadmap).read_text(encoding="utf-8")
+    change_dirs = {
+        f"docs/changes/{node.path.parent.name}/" for node in nodes.values() if node.kind == "change"
+    }
+    roadmap = _roadmap_transition_text(
+        roadmap,
+        node=change,
+        destination_status=destination,
+        change_dirs=change_dirs,
+    )
+    findings = validate(
+        root,
+        nodes,
+        cycle,
+        settings,
+        roadmap_override=_without_generated_roadmap(roadmap),
+    )
+    transitioned = Resolution(
+        nodes=nodes,
+        findings=findings,
+        topo_order=order,
+        discovery=result.discovery,
+        document_paths=result.document_paths,
+    )
+    return TransitionProjection(
+        change_document=ProjectedDocument(change.path, new_text),
+        dependent_documents=tuple(dependent_documents),
+        resolution=_projected_resolution(transitioned),
+        roadmap_block=render_block(transitioned),
+        roadmap_text=roadmap,
+        source_status=old_status,
+        destination_status=destination,
+        accepted_at=accepted_at,
+        started_at=started_at,
     )
 
 

@@ -146,7 +146,11 @@ the change says otherwise; don't commit unless asked; stop and surface any instr
 contradicts the ADRs / roadmap / code.
 
 Once the repository's agent setup loads this contract, dispatch collapses to one line:
-**"Execute `docs/changes/<name>/`."** Landing is completed
+**"Execute `docs/changes/<name>/`."** Before dispatch, only an explicit user or reviewer instruction
+authorizes `doc-contract accept`; the command records `accepted` but cannot infer authority. Run
+`doc-contract begin` only after entry reconciliation, and begin refuses proposed, blocked, and
+landed changes. The supported sequence is author → explicit acceptance → `accept` → entry
+reconciliation → `begin` → work → exit reconciliation → `land`. Landing is completed
 through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns

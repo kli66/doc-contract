@@ -11,11 +11,17 @@ from typing import Sequence
 from . import __version__
 from .config import ConfigError, Settings, load_settings, resolve_repo_root
 from .landing import LandingError, LandingPlan, execute_landing
+from .lifecycle import (
+    LifecycleError,
+    LifecyclePlan,
+    TransitionAction,
+    execute_transition,
+)
 from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap
 from .sync import sync_package
 from .verification import VerificationPolicy, verify
 
-COMMANDS = frozenset({"check", "update", "stamp", "sync", "land"})
+COMMANDS = frozenset({"check", "update", "stamp", "sync", "accept", "begin", "land"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     land.add_argument("change_ref", help="change ID or repository-relative change folder")
     land.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
     land.add_argument("--include-untracked", action="store_true")
+    for name, help_text in (("accept", "record explicit acceptance"), ("begin", "start work on an accepted change")):
+        transition = subparsers.add_parser(name, parents=[common], help=help_text)
+        transition.add_argument("change_ref", help="change ID or repository-relative change folder")
+        transition.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+        transition.add_argument("--include-untracked", action="store_true")
     return parser
 
 
@@ -189,6 +200,57 @@ def _land(
     return 0
 
 
+def _print_lifecycle_plan(plan: LifecyclePlan) -> None:
+    if plan.provisional_nodes:
+        print("untracked discovery preview (no mutation yet):")
+        for node_id, path in plan.provisional_nodes:
+            print(f"  + {node_id}: {path}")
+    print(
+        f"{plan.action.value} plan: {plan.change_id}; {plan.source_status} -> "
+        f"{plan.destination_status}; {len(plan.mutations)} mutation(s)"
+    )
+    print("input/output plan hash:", plan.input_tree_hash, "->", plan.output_tree_hash)
+    if plan.diff:
+        print(plan.diff, end="" if plan.diff.endswith("\n") else "\n")
+
+
+def _transition(
+    context: Context,
+    change_ref: str,
+    *,
+    action: TransitionAction,
+    dry_run: bool,
+    include_untracked: bool,
+) -> int:
+    try:
+        outcome = execute_transition(
+            context.root,
+            context.settings,
+            change_ref,
+            action=action,
+            dry_run=dry_run,
+            include_untracked=include_untracked,
+            on_plan=_print_lifecycle_plan,
+        )
+    except LifecycleError as exc:
+        print(f"ERROR: [{type(exc).__name__}] {exc}", file=sys.stderr)
+        return 1
+    if outcome.already_applied:
+        state_word = "accepted" if action is TransitionAction.ACCEPT else "in-progress"
+        print(f"{change_ref} already {state_word}; no mutations")
+        return 0
+    if dry_run:
+        print("dry-run; no mutations")
+        return 0
+    _print_findings([finding for finding in outcome.final_findings if finding.level == "ERROR"])
+    if any(finding.level == "ERROR" for finding in outcome.final_findings):
+        print("transition applied but final validation failed; journal retained", file=sys.stderr)
+        return 1
+    state_word = "accepted" if action is TransitionAction.ACCEPT else "in-progress"
+    print(f"{outcome.plan.change_id if outcome.plan else change_ref} {state_word}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -212,6 +274,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _land(
             context,
             args.change_ref,
+            dry_run=args.dry_run,
+            include_untracked=args.include_untracked,
+        )
+    if args.command == "accept":
+        return _transition(
+            context,
+            args.change_ref,
+            action=TransitionAction.ACCEPT,
+            dry_run=args.dry_run,
+            include_untracked=args.include_untracked,
+        )
+    if args.command == "begin":
+        return _transition(
+            context,
+            args.change_ref,
+            action=TransitionAction.BEGIN,
             dry_run=args.dry_run,
             include_untracked=args.include_untracked,
         )

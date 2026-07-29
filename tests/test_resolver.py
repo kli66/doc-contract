@@ -112,6 +112,31 @@ def test_discovery_defaults_to_tracked_and_declared_nodes(tmp_path: Path) -> Non
     ]
 
 
+@pytest.mark.parametrize("status", ["proposed", "accepted", "in-progress", "blocked", "landed"])
+def test_supported_change_statuses_resolve(tmp_path: Path, status: str) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap("item").replace("(proposed)", f"({status})"))
+    _write(
+        root,
+        "docs/changes/item/change.md",
+        _change("item").replace("status: proposed", f"status: {status}"),
+    )
+    result = resolve(root, _settings(root))
+    assert not [finding for finding in result.errors if finding.code == "unknown-change-status"]
+
+
+def test_unknown_change_status_is_an_error(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap("item"))
+    _write(
+        root,
+        "docs/changes/item/change.md",
+        _change("item").replace("status: proposed", "status: reviewing"),
+    )
+    result = resolve(root, _settings(root))
+    assert "unknown-change-status" in {finding.code for finding in result.errors}
+
+
 def test_secret_scanning_reuses_discovered_document_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
