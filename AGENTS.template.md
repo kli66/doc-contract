@@ -156,8 +156,10 @@ authorizes `doc-contract accept`; the command records `accepted` but cannot infe
 `doc-contract begin` only after entry reconciliation, and begin refuses proposed, blocked, and
 landed changes. The supported sequence is author → explicit acceptance → `accept` → mechanical then
 semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →
-`land`. Landing is completed
-through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`.
+`land`. Landing is completed through a compact scope review with `doc-contract land <folder>
+--dry-run`; add `--diff` when line-level review of the complete patch is needed, then run the reviewed
+command without `--dry-run`. The flag changes presentation only and does not weaken or strengthen the
+transaction boundary.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns
 the status, roadmap, fingerprint, journal, and archive boundaries.

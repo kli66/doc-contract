@@ -12,12 +12,13 @@ from typing import Callable, Mapping, Sequence
 
 from .config import Settings
 from .resolver import (
+    CHANGE_STATUSES,
     Finding,
     Resolution,
-    locate_change,
     parse_front_matter,
     project_transition,
     resolve,
+    split_front_matter,
 )
 from .transaction import (
     ConcurrentModification,
@@ -42,7 +43,62 @@ class TransitionAction(str, Enum):
     BEGIN = "begin"
 
 
-LifecycleError = TransactionError
+class LifecycleRequest(str, Enum):
+    ACCEPT = "accept"
+    BEGIN = "begin"
+    RECONCILE_ENTRY = "reconcile-entry"
+    RECONCILE_EXIT = "reconcile-exit"
+    LAND = "land"
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleDiagnostic:
+    code: str
+    message: str
+    next_command: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleSelection:
+    change_id: str
+    path: str
+    status: str
+    tracking: TrackingMode
+    gate_present: bool
+    diagnostic: LifecycleDiagnostic | None = None
+
+
+class LifecycleError(TransactionError):
+    """A lifecycle blocker with stable, value-free diagnostic fields."""
+
+    def __init__(
+        self,
+        diagnostic: LifecycleDiagnostic | str,
+        *,
+        change_id: str | None = None,
+        path: str | None = None,
+        status: str | None = None,
+        gate_present: bool | None = None,
+    ) -> None:
+        if isinstance(diagnostic, str):
+            prefix, separator, _ = diagnostic.partition(":")
+            diagnostic = LifecycleDiagnostic(
+                prefix if separator else "lifecycle-failed",
+                diagnostic,
+            )
+        super().__init__(diagnostic.message)
+        self.diagnostic = diagnostic
+        self.change_id = change_id
+        self.path = path
+        self.status = status
+        self.gate_present = gate_present
+
+
+@dataclass(frozen=True, slots=True)
+class _Candidate:
+    path: Path
+    archive: bool
+    requested_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +205,308 @@ class LifecycleOutcome:
         return self.already_applied
 
 
+def _diagnostic(
+    code: str, message: str, next_command: str | None = None
+) -> LifecycleDiagnostic:
+    return LifecycleDiagnostic(code, message, next_command)
+
+
+def _raise_diagnostic(
+    diagnostic: LifecycleDiagnostic,
+    *,
+    change_id: str | None = None,
+    path: str | None = None,
+    status: str | None = None,
+    gate_present: bool | None = None,
+) -> None:
+    raise LifecycleError(
+        diagnostic,
+        change_id=change_id,
+        path=path,
+        status=status,
+        gate_present=gate_present,
+    )
+
+
+def _normalized_request(action: LifecycleRequest | str) -> LifecycleRequest:
+    try:
+        return action if isinstance(action, LifecycleRequest) else LifecycleRequest(action)
+    except ValueError:
+        raise LifecycleError("lifecycle-action-invalid: unsupported lifecycle action") from None
+
+
+def _canonical_command(
+    action: LifecycleRequest,
+    change_id: str,
+    *,
+    include_untracked: bool = False,
+) -> str:
+    suffix = " --include-untracked" if include_untracked else ""
+    if action is LifecycleRequest.RECONCILE_ENTRY:
+        return f"doc-contract reconcile mechanical {change_id} --phase entry{suffix}"
+    if action is LifecycleRequest.RECONCILE_EXIT:
+        return f"doc-contract reconcile mechanical {change_id} --phase exit{suffix}"
+    return f"doc-contract {action.value} {change_id} --dry-run{suffix}"
+
+
+def _safe_folder_id(candidate: _Candidate) -> str:
+    if candidate.requested_id is not None:
+        return candidate.requested_id
+    name = candidate.path.name
+    if candidate.archive:
+        match = re.fullmatch(r"\d{4}-\d{2}-\d{2}-(.+)", name)
+        if match is not None:
+            name = match.group(1)
+    return name if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) else "CHANGE"
+
+
+def _wrong_folder() -> None:
+    _raise_diagnostic(
+        _diagnostic(
+            "change-ref-wrong-folder",
+            "change reference is not an exact active or archive change folder",
+        )
+    )
+
+
+def _path_candidate(root: Path, ref: str) -> _Candidate | None:
+    raw = Path(ref)
+    path_shaped = raw.is_absolute() or len(raw.parts) > 1 or ref in {".", ".."}
+    if not path_shaped:
+        return None
+    candidate = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        _wrong_folder()
+    parts = relative.parts
+    active_shape = len(parts) == 3 and parts[:2] == ("docs", "changes")
+    archive_shape = len(parts) == 4 and parts[:3] == ("docs", "changes", "archive")
+    if not (active_shape or archive_shape) or (active_shape and parts[2] == "archive"):
+        _wrong_folder()
+    if candidate.exists() and not candidate.is_dir():
+        _wrong_folder()
+    return _Candidate(candidate, archive_shape, None)
+
+
+def _id_candidate(root: Path, ref: str) -> _Candidate | None:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", ref):
+        return None
+    active_root = root / "docs/changes"
+    direct = active_root / ref
+    if direct.is_dir() and ref != "archive":
+        return _Candidate(direct, False, ref)
+    if active_root.is_dir():
+        for document in sorted(active_root.rglob(f"{ref}.md")):
+            if "archive" not in document.relative_to(active_root).parts and document.is_file():
+                return _Candidate(document.parent, False, ref)
+    archive_root = active_root / "archive"
+    if archive_root.is_dir():
+        suffix_matches = [
+            folder
+            for folder in sorted(archive_root.iterdir())
+            if folder.is_dir() and folder.name.endswith(f"-{ref}")
+        ]
+        if len(suffix_matches) == 1:
+            return _Candidate(suffix_matches[0], True, ref)
+        for folder in sorted(archive_root.iterdir()):
+            if not folder.is_dir():
+                continue
+            for document in sorted(folder.glob("*.md")):
+                try:
+                    values = parse_front_matter(document.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if values is not None and values.get("id") == ref:
+                    return _Candidate(folder, True, ref)
+    return None
+
+
+def _candidate_for_ref(root: Path, ref: str) -> _Candidate | None:
+    return _path_candidate(root, ref) or _id_candidate(root, ref)
+
+
+def _candidate_metadata(
+    root: Path,
+    candidate: _Candidate,
+) -> tuple[str, str, bool]:
+    relative = candidate.path.relative_to(root).as_posix()
+    documents = sorted(candidate.path.glob("*.md"))
+    with_headers: list[dict[str, object]] = []
+    malformed = False
+    for document in documents:
+        try:
+            text = document.read_text(encoding="utf-8")
+        except OSError:
+            malformed = True
+            continue
+        raw, _ = split_front_matter(text)
+        if raw is None:
+            continue
+        try:
+            values = parse_front_matter(text)
+        except ValueError:
+            malformed = True
+            continue
+        if values is not None:
+            with_headers.append(dict(values))
+    if not with_headers and not malformed:
+        _raise_diagnostic(
+            _diagnostic(
+                "change-front-matter-missing",
+                f"change folder {relative} has no node-bearing Markdown front matter",
+            ),
+            change_id=_safe_folder_id(candidate),
+            path=relative,
+        )
+    requested_id = candidate.requested_id
+    matching = [values for values in with_headers if values.get("id") == requested_id]
+    selected = matching if requested_id is not None and matching else with_headers
+    if malformed or len(selected) != 1:
+        _raise_diagnostic(
+            _diagnostic(
+                "change-front-matter-invalid",
+                f"change folder {relative} has invalid or ambiguous front matter",
+            ),
+            change_id=_safe_folder_id(candidate),
+            path=relative,
+        )
+    values = selected[0]
+    change_id = values.get("id")
+    status = values.get("status")
+    valid_identity = isinstance(change_id, str) and bool(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", change_id)
+    )
+    valid_status = isinstance(status, str) and status in CHANGE_STATUSES
+    archive_path = values.get("archive_path")
+    archive_metadata_valid = archive_path is None or archive_path == relative
+    location_valid = status == "landed" if candidate.archive else status != "landed"
+    if not (valid_identity and valid_status and archive_metadata_valid and location_valid):
+        _raise_diagnostic(
+            _diagnostic(
+                "change-front-matter-invalid",
+                f"change folder {relative} has invalid or ambiguous front matter",
+            ),
+            change_id=_safe_folder_id(candidate),
+            path=relative,
+        )
+    assert isinstance(change_id, str)
+    assert isinstance(status, str)
+    return change_id, status, "gated_on" in values
+
+
+def classify_change(
+    root: Path,
+    settings: Settings,
+    change_ref: str,
+    *,
+    action: LifecycleRequest | str,
+    include_untracked: bool = False,
+) -> LifecycleSelection:
+    """Classify one lifecycle reference before whole-repository preflight."""
+    del settings  # Reserved for repository-layout configuration in a future schema.
+    root = root.resolve()
+    request = _normalized_request(action)
+    candidate = _candidate_for_ref(root, change_ref)
+    if candidate is None or not candidate.path.exists():
+        _raise_diagnostic(
+            _diagnostic("change-ref-unknown", "change reference is unknown")
+        )
+    relative = candidate.path.relative_to(root).as_posix()
+    tracking = tracking_mode(root, candidate.path)
+    if tracking == "untracked" and not include_untracked:
+        change_id = _safe_folder_id(candidate)
+        _raise_diagnostic(
+            _diagnostic(
+                "change-untracked-excluded",
+                f"change {change_id} is untracked and excluded",
+                _canonical_command(request, change_id, include_untracked=True),
+            ),
+            change_id=change_id,
+            path=relative,
+        )
+    change_id, status, gate_present = _candidate_metadata(root, candidate)
+    if status == "blocked":
+        gate = "true" if gate_present else "false"
+        _raise_diagnostic(
+            _diagnostic(
+                "change-blocked",
+                f"change {change_id} has status=blocked; gate_present={gate}",
+            ),
+            change_id=change_id,
+            path=relative,
+            status=status,
+            gate_present=gate_present,
+        )
+    if status == "proposed" and request is not LifecycleRequest.ACCEPT:
+        _raise_diagnostic(
+            _diagnostic(
+                "change-proposed-unaccepted",
+                f"change {change_id} has status=proposed and is not accepted",
+                _canonical_command(LifecycleRequest.ACCEPT, change_id),
+            ),
+            change_id=change_id,
+            path=relative,
+            status=status,
+        )
+    requires_started = request in {
+        LifecycleRequest.RECONCILE_EXIT,
+        LifecycleRequest.LAND,
+    }
+    if status == "accepted" and requires_started:
+        _raise_diagnostic(
+            _diagnostic(
+                "change-accepted-not-started",
+                f"change {change_id} has status=accepted and has not started",
+                _canonical_command(LifecycleRequest.BEGIN, change_id),
+            ),
+            change_id=change_id,
+            path=relative,
+            status=status,
+        )
+    if status == "landed":
+        diagnostic = _diagnostic(
+            "change-already-landed",
+            f"change {change_id} has status=landed",
+        )
+        if request is not LifecycleRequest.LAND:
+            _raise_diagnostic(
+                diagnostic,
+                change_id=change_id,
+                path=relative,
+                status=status,
+            )
+        return LifecycleSelection(
+            change_id,
+            relative,
+            status,
+            tracking,
+            gate_present,
+            diagnostic,
+        )
+    return LifecycleSelection(
+        change_id,
+        relative,
+        status,
+        tracking,
+        gate_present,
+    )
+
+
+def _resolve_preflight(
+    root: Path,
+    settings: Settings,
+    *,
+    include_untracked: bool,
+) -> Resolution:
+    try:
+        return resolve(root, settings, include_untracked=include_untracked)
+    except (OSError, ValueError):
+        raise LifecycleError(
+            _diagnostic("preflight-invalid", "repository preflight failed")
+        ) from None
+
+
 def _required_str(raw: Mapping[str, object], key: str) -> str:
     value = raw.get(key)
     if not isinstance(value, str) or not value:
@@ -193,22 +551,10 @@ def _validate_date(date: str | None) -> str:
 
 
 def _status_error(action: TransitionAction, change_id: str, status: str) -> LifecycleError:
-    if status == "blocked":
-        return LifecycleError(f"blocked-change: {action.value} refuses blocked change {change_id}")
     expected = "proposed" if action is TransitionAction.ACCEPT else "accepted"
     return LifecycleError(
         f"lifecycle-ineligible: {action.value} requires {expected}; {change_id} is {status}"
     )
-
-
-def _locate_for_lifecycle(root: Path, ref: str, result: Resolution) -> tuple[str, Path]:
-    node = result.nodes.get(ref)
-    if node is not None and node.kind == "change":
-        return ref, node.path.parent
-    try:
-        return locate_change(root, ref, result.nodes)
-    except ValueError as exc:
-        raise LifecycleError(str(exc)) from None
 
 
 def _metadata_path(root: Path, action: TransitionAction, change_id: str) -> Path:
@@ -295,21 +641,28 @@ def plan_transition(
     root = root.resolve()
     action = _normalize_action(action)
     day = _validate_date(date)
-    result = resolve(root, settings, include_untracked=include_untracked)
+    request = (
+        LifecycleRequest.ACCEPT
+        if action is TransitionAction.ACCEPT
+        else LifecycleRequest.BEGIN
+    )
+    selection = classify_change(
+        root,
+        settings,
+        change_ref,
+        action=request,
+        include_untracked=include_untracked,
+    )
+    result = _resolve_preflight(
+        root,
+        settings,
+        include_untracked=include_untracked,
+    )
     if result.errors:
         raise LifecycleError("preflight-invalid: repository has resolver errors")
-    requested = Path(change_ref).name
-    if not include_untracked and any(
-        not record.included
-        and (record.node_id == requested or requested in Path(record.path).parts)
-        for record in result.discovery
-    ):
-        raise LifecycleError(
-            "untracked-change-excluded: rerun with --include-untracked to preview it"
-        )
-    change_id, source = _locate_for_lifecycle(root, change_ref, result)
-    node = result.nodes[change_id]
-    status = node.status or ""
+    change_id = selection.change_id
+    source = root / selection.path
+    status = selection.status
     destination = "accepted" if action is TransitionAction.ACCEPT else "in-progress"
     if status == destination:
         return _make_noop_plan(
@@ -375,20 +728,6 @@ def plan_transition(
     )
 
 
-def _change_id_for_ref(root: Path, ref: str, result: Resolution) -> str | None:
-    if ref in result.nodes and result.nodes[ref].kind == "change":
-        return ref
-    candidate = (root / ref).resolve()
-    if not candidate.is_dir():
-        return None
-    for doc in sorted(candidate.glob("*.md")):
-        values = parse_front_matter(doc.read_text(encoding="utf-8")) or {}
-        value = values.get("id")
-        if isinstance(value, str) and value in result.nodes:
-            return value
-    return None
-
-
 def execute_transition(
     root: Path,
     settings: Settings,
@@ -403,9 +742,24 @@ def execute_transition(
 ) -> LifecycleOutcome:
     root = root.resolve()
     action = _normalize_action(action)
-    result = resolve(root, settings, include_untracked=include_untracked)
-    change_id = _change_id_for_ref(root, change_ref, result)
-    journal_path = _metadata_path(root, action, change_id or Path(change_ref).name)
+    request = (
+        LifecycleRequest.ACCEPT
+        if action is TransitionAction.ACCEPT
+        else LifecycleRequest.BEGIN
+    )
+    selection = classify_change(
+        root,
+        settings,
+        change_ref,
+        action=request,
+        include_untracked=include_untracked,
+    )
+    result = _resolve_preflight(
+        root,
+        settings,
+        include_untracked=include_untracked,
+    )
+    journal_path = _metadata_path(root, action, selection.change_id)
     if journal_path.is_file():
         plan, completed = load_journal(journal_path, LifecyclePlan.from_dict)
     else:
@@ -449,10 +803,14 @@ def execute_transition(
 __all__ = [
     "ConcurrentModification",
     "InjectedInterruption",
+    "LifecycleDiagnostic",
     "LifecycleError",
     "LifecycleOutcome",
     "LifecyclePlan",
+    "LifecycleRequest",
+    "LifecycleSelection",
     "TransitionAction",
+    "classify_change",
     "execute_transition",
     "plan_transition",
 ]

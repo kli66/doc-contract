@@ -6,8 +6,8 @@ persistence: living
 
 ## Remediation
 
-- `docs/changes/concise-landing-output/` (proposed) — make `land` print a compact mutation inventory by default and expose the complete diff only through an explicit flag; depends on the landed transactional command
-- `docs/changes/actionable-lifecycle-diagnostics/` (proposed) — give acceptance, start, mechanical reconciliation, and landing one stable value-free lifecycle diagnostic taxonomy; depends on accepted state and mechanical reconciliation
+- `docs/changes/archive/2026-07-30-concise-landing-output/` (landed) — make `land` print a compact mutation inventory by default and expose the complete diff only through an explicit flag; depends on the landed transactional command
+- `docs/changes/archive/2026-07-30-actionable-lifecycle-diagnostics/` (landed) — give acceptance, start, mechanical reconciliation, and landing one stable value-free lifecycle diagnostic taxonomy; depends on accepted state and mechanical reconciliation
 - `docs/changes/optional-project-memory/` (proposed) — make repository artifacts sufficient for every lifecycle phase and keep external project memory optional and explicitly authorized; depends on the landed portable install contract
 - `docs/changes/archive/2026-07-27-reuse-document-discovery-for-secret-scanning/` (landed) — run document discovery once and feed its exact selected path set to both graph validation and value-free secret scanning; depends on the landed secret-handling and discovery changes
 - `docs/changes/archive/2026-07-23-secret-handling-guardrails/` (landed) — scanner and redacted
@@ -44,15 +44,17 @@ persistence: living
 
 ## Lifecycle
 
+- `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
+- `docs/changes/review-bound-acceptance-plan/` (proposed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
 flowchart TD
     accepted_change_state["accepted-change-state (landed)"]
-    actionable_lifecycle_diagnostics["actionable-lifecycle-diagnostics (proposed)"]
+    actionable_lifecycle_diagnostics["actionable-lifecycle-diagnostics (landed)"]
     always_valid_repository_settings["always-valid-repository-settings (landed)"]
-    concise_landing_output["concise-landing-output (proposed)"]
+    concise_landing_output["concise-landing-output (landed)"]
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
@@ -60,13 +62,18 @@ flowchart TD
     mechanical_reconciliation["mechanical-reconciliation (landed)"]
     optional_project_memory["optional-project-memory (proposed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
+    proportional_accepted_work_contract["proportional-accepted-work-contract (proposed)"]
     reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]
+    review_bound_acceptance_plan["review-bound-acceptance-plan (proposed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
     vendored_runtime_closure["vendored-runtime-closure (landed)"]
     accepted_change_state --> actionable_lifecycle_diagnostics
     accepted_change_state --> mechanical_reconciliation
+    accepted_change_state --> proportional_accepted_work_contract
+    accepted_change_state --> review_bound_acceptance_plan
+    actionable_lifecycle_diagnostics --> review_bound_acceptance_plan
     discovery_lifecycle_hardening --> edge_fingerprint_policy
     discovery_lifecycle_hardening --> reuse_document_discovery_for_secret_scanning
     edge_fingerprint_policy --> landed_graph_transition_ownership
@@ -75,6 +82,8 @@ flowchart TD
     global_cwd_independent_cli --> transactional_land_command
     landed_graph_transition_ownership --> accepted_change_state
     mechanical_reconciliation --> actionable_lifecycle_diagnostics
+    mechanical_reconciliation --> proportional_accepted_work_contract
+    mechanical_reconciliation --> review_bound_acceptance_plan
     portable_install_contract_convergence --> always_valid_repository_settings
     portable_install_contract_convergence --> optional_project_memory
     portable_install_contract_convergence --> vendored_runtime_closure

@@ -338,7 +338,10 @@ def test_excluded_untracked_change_retains_identity_and_rerun_instruction(tmp_pa
         "status": None,
     }
     assert "transactional (docs/changes/transactional)" in text
-    assert "rerun with --include-untracked" in text
+    assert "[change-untracked-excluded]" in text
+    assert report.next_command == (
+        "doc-contract reconcile mechanical transactional --phase exit --include-untracked"
+    )
 
 
 def test_dependency_failure_blocks_reconciliation(tmp_path: Path) -> None:

@@ -10,12 +10,17 @@ from pathlib import Path
 from typing import Callable
 
 from .config import Settings
+from .lifecycle import (
+    LifecycleDiagnostic,
+    LifecycleError,
+    LifecycleRequest,
+    _resolve_preflight,
+    classify_change,
+)
 from .resolver import (
     DAG_BEGIN_PREFIX,
     DAG_END,
     Finding,
-    parse_front_matter,
-    locate_change,
     project_landing,
     resolve,
 )
@@ -32,7 +37,6 @@ from .transaction import (
     required_str as _required_str,
     save_journal as _save_journal,
     sha as _sha,
-    tracking_mode as _tracking_mode,
     tree_hash as _tree_hash,
     tree_hash_with as _tree_hash_with,
 )
@@ -66,7 +70,7 @@ class LandingPlan:
     date: str
     tracking: TrackingMode
     mutations: tuple[Mutation, ...]
-    diff: str
+    diff: str | None
     input_tree_hash: str
     output_tree_hash: str
     journal_path: str
@@ -81,6 +85,7 @@ class LandingPlan:
             "archive": self.archive,
             "date": self.date,
             "tracking": self.tracking,
+            "diff": self.diff,
             "input_tree_hash": self.input_tree_hash,
             "output_tree_hash": self.output_tree_hash,
             "journal_path": self.journal_path,
@@ -121,6 +126,9 @@ class LandingPlan:
             for item in warning_items
         ):
             raise LandingError("journal-invalid: baseline_warnings is malformed")
+        diff = raw.get("diff")
+        if diff is not None and not isinstance(diff, str):
+            raise LandingError("journal-invalid: diff is malformed")
         return cls(
             change_id=_required_str(raw, "change_id"),
             source=_required_str(raw, "source"),
@@ -128,7 +136,7 @@ class LandingPlan:
             date=_required_str(raw, "date"),
             tracking=tracking,
             mutations=tuple(Mutation.from_dict(item) for item in mutations),
-            diff="",
+            diff=diff,
             input_tree_hash=_required_str(raw, "input_tree_hash"),
             output_tree_hash=_required_str(raw, "output_tree_hash"),
             journal_path=_required_str(raw, "journal_path"),
@@ -145,6 +153,7 @@ class LandingOutcome:
     plan: LandingPlan | None
     already_landed: bool
     verification: VerificationOutcome | None = None
+    diagnostic: LifecycleDiagnostic | None = None
 
     @property
     def final_findings(self) -> tuple[Finding, ...]:
@@ -211,7 +220,25 @@ def _plan_landing(
     include_untracked: bool = False,
 ) -> LandingPlan:
     root = root.resolve()
-    result = resolve(root, settings, include_untracked=include_untracked)
+    selection = classify_change(
+        root,
+        settings,
+        ref,
+        action=LifecycleRequest.LAND,
+        include_untracked=include_untracked,
+    )
+    if selection.diagnostic is not None:
+        raise LifecycleError(
+            selection.diagnostic,
+            change_id=selection.change_id,
+            path=selection.path,
+            status=selection.status,
+        )
+    result = _resolve_preflight(
+        root,
+        settings,
+        include_untracked=include_untracked,
+    )
     if result.errors:
         raise LandingError(
             "preflight-invalid: repository has resolver errors",
@@ -222,26 +249,8 @@ def _plan_landing(
             "preflight-invalid: dependency graph contains a cycle",
             findings=tuple(finding for finding in result.findings if finding.code == "cycle"),
         )
-    requested = Path(ref).name
-    if not include_untracked and any(
-        not record.included
-        and (record.node_id == requested or requested in Path(record.path).parts)
-        for record in result.discovery
-    ):
-        raise LandingError(
-            "untracked-change-excluded: rerun with --include-untracked to preview it"
-        )
-    try:
-        change_id, source = locate_change(root, ref, result.nodes)
-    except ValueError as exc:
-        raise LandingError(str(exc)) from None
-    status = result.nodes[change_id].status
-    if status != "in-progress":
-        if status == "blocked":
-            raise LandingError(f"blocked-change: land refuses blocked change {change_id}")
-        raise LandingError(
-            f"lifecycle-ineligible: land requires in-progress; {change_id} is {status}"
-        )
+    change_id = selection.change_id
+    source = root / selection.path
     source_rel = source.relative_to(root).as_posix()
     day = date or _datetime.date.today().isoformat()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
@@ -250,7 +259,7 @@ def _plan_landing(
     archive = root / archive_rel
     if archive.exists():
         raise LandingError("destination-collision: archive destination already exists")
-    tracking = _tracking_mode(root, source)
+    tracking = selection.tracking
     change_file = source / "change.md"
     if not change_file.is_file():
         raise LandingError("change-invalid: change.md is missing")
@@ -345,42 +354,14 @@ def plan_landing(
         )
     except LandingError:
         raise
+    except LifecycleError:
+        raise
     except TransactionError as exc:
         raise LandingError(str(exc)) from None
 
 
 def _load_journal(path: Path) -> tuple[LandingPlan, list[int]]:
     return load_journal(path, LandingPlan.from_dict)
-
-
-def _find_completed(root: Path, change_id: str) -> bool:
-    archive_root = root / "docs/changes/archive"
-    if not archive_root.is_dir():
-        return False
-    for folder in sorted(archive_root.iterdir()):
-        change = folder / "change.md"
-        if not change.is_file():
-            continue
-        try:
-            values = parse_front_matter(change.read_text(encoding="utf-8")) or {}
-        except (OSError, ValueError):
-            continue
-        recorded_id = values.get("id")
-        matches_id = isinstance(recorded_id, str) and recorded_id == change_id
-        matches_folder = folder.name.endswith(f"-{change_id}")
-        raw_archive = values.get("archive_path")
-        recorded_archive = raw_archive if isinstance(raw_archive, str) else None
-        actual_archive = folder.relative_to(root).as_posix()
-        metadata_matches = recorded_archive is None or recorded_archive == actual_archive
-        status = values.get("status")
-        if (
-            (matches_id or matches_folder)
-            and metadata_matches
-            and isinstance(status, str)
-            and status == "landed"
-        ):
-            return True
-    return False
 
 
 def _journal_for(root: Path, change_id: str) -> Path:
@@ -399,26 +380,36 @@ def execute_landing(
     on_plan: Callable[[LandingPlan], None] | None = None,
 ) -> LandingOutcome:
     root = root.resolve()
-    result = resolve(root, settings, include_untracked=include_untracked)
-    active_id: str | None = None
-    if Path(ref).parts and Path(ref).parts[0] == "docs":
-        active_id = Path(ref).name
-    elif ref in result.nodes:
-        active_id = ref
-    journal_path = _journal_for(root, active_id or Path(ref).name)
-    if journal_path.is_file() and not dry_run:
-        plan, completed = _load_journal(journal_path)
+    journal_hint = _journal_for(root, Path(ref).name)
+    if journal_hint.is_file() and not dry_run:
+        plan, completed = _load_journal(journal_hint)
+        journal_path = journal_hint
     else:
-        if active_id and _find_completed(root, active_id):
-            return LandingOutcome(None, True)
-        plan = plan_landing(
+        selection = classify_change(
             root,
             settings,
             ref,
-            date=date,
+            action=LifecycleRequest.LAND,
             include_untracked=include_untracked,
         )
-        completed = []
+        journal_path = _journal_for(root, selection.change_id)
+        if journal_path.is_file() and not dry_run:
+            plan, completed = _load_journal(journal_path)
+        else:
+            if selection.diagnostic is not None:
+                return LandingOutcome(
+                    None,
+                    True,
+                    diagnostic=selection.diagnostic,
+                )
+            plan = plan_landing(
+                root,
+                settings,
+                ref,
+                date=date,
+                include_untracked=include_untracked,
+            )
+            completed = []
     if on_plan is not None:
         on_plan(plan)
     if dry_run:

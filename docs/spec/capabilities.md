@@ -57,7 +57,31 @@ and repeating the command without a package change does not rewrite files.
 
 ### `land`
 
-Plan and apply a hash-guarded, resumable change landing. It previews the complete write/move set with `--dry-run`, journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`; the plan prints those nodes before mutation, and the outcome reports baseline, new, and resolved warning counts. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op.
+Plan and apply a hash-guarded, resumable change landing. The default plan is a compact, deterministic scope review: it identifies the source, archive, tracking mode, provisional nodes, warning count, write/move totals, and every ordered mutation path without printing document content or transaction hashes. `--diff` appends the planner's complete patch to the same summary for line-level review; it changes presentation only. A dry run prints the value-free preflight warning details because no post-mutation warning report follows. Landing journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. New private journals retain the complete diff across resume; older journals remain resumable and report that the historical diff is unavailable when `--diff` is requested. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`, and the outcome reports baseline, new, and resolved warning counts. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op. The private journal representation is not a public JSON output contract.
+
+## Lifecycle diagnostics
+
+`accept`, `begin`, both mechanical reconciliation phases, and `land` classify the selected change
+before whole-repository preflight through one lifecycle interface. Text and schema-1 JSON preserve
+the same code, message, and nullable next command.
+
+| Code | Condition | Next command |
+| --- | --- | --- |
+| `change-proposed-unaccepted` | status is `proposed` but the action requires acceptance or execution | `doc-contract accept CHANGE --dry-run` |
+| `change-accepted-not-started` | status is `accepted` but the action requires `in-progress` | `doc-contract begin CHANGE --dry-run` |
+| `change-blocked` | status is `blocked` | none |
+| `change-already-landed` | valid archive lineage matches the normalized ID or archive path | none |
+| `change-untracked-excluded` | the selected candidate is excluded by tracked-only discovery | replay the same normalized command with `--include-untracked` |
+| `change-front-matter-missing` | the selected folder has no node-bearing Markdown front matter | none |
+| `change-front-matter-invalid` | selected front matter is malformed, ambiguous, or lacks valid identity/status | none |
+| `change-ref-wrong-folder` | a path-shaped reference is not an exact contained active/archive folder | none |
+| `change-ref-unknown` | no active candidate or valid archive lineage matches | none |
+
+Messages contain only normalized change ID, repository-relative path, canonical lifecycle status,
+and `gate_present=true|false`; they never include raw input, front matter, parser fragments, body
+content, gate text, environment values, or subprocess output. Repeated `land` emits
+`INFO: [change-already-landed]` and exits `0`. Every classified blocker emits
+`ERROR: [<stable-code>]` and exits `1`; argparse and configuration failures alone use exit `2`.
 
 The supported lifecycle is author → explicit user/reviewer acceptance → `accept` → mechanical then
 semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →

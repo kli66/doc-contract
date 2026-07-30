@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     land = subparsers.add_parser("land", parents=[common], help="transactionally archive a change")
     land.add_argument("change_ref", help="change ID or repository-relative change folder")
     land.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+    land.add_argument("--diff", action="store_true", help="append the complete content patch")
     land.add_argument("--include-untracked", action="store_true")
     for name, help_text in (("accept", "record explicit acceptance"), ("begin", "start work on an accepted change")):
         transition = subparsers.add_parser(name, parents=[common], help=help_text)
@@ -183,17 +184,33 @@ def _reconcile(
     return 0 if report.ready else 1
 
 
-def _print_plan(plan: LandingPlan) -> None:
+def _print_plan(plan: LandingPlan, *, include_diff: bool) -> None:
+    write_count = sum(mutation.kind == "write" for mutation in plan.mutations)
+    move_count = sum(mutation.kind == "move" for mutation in plan.mutations)
+    print(f"land plan: {plan.change_id}")
+    print(f"source: {plan.source}")
+    print(f"archive: {plan.archive}")
+    print(f"tracking: {plan.tracking}")
+    print(f"provisional nodes: {len(plan.provisional_nodes)}")
     if plan.provisional_nodes:
-        print("untracked discovery preview (no mutation yet):")
         for node_id, path in plan.provisional_nodes:
             print(f"  + {node_id}: {path}")
     print(
-        f"land plan: {plan.change_id}; {plan.source} -> {plan.archive}; "
-        f"tracking={plan.tracking}; {len(plan.mutations)} mutation(s)"
+        f"mutations: {len(plan.mutations)} total; {write_count} write(s), "
+        f"{move_count} move(s)"
     )
-    print("input/output tree:", plan.input_tree_hash, "->", plan.output_tree_hash)
-    print(plan.diff, end="" if plan.diff.endswith("\n") else "\n")
+    for mutation in plan.mutations:
+        if mutation.kind == "write":
+            print(f"  write {mutation.path}")
+        else:
+            print(f"  move {mutation.path} -> {mutation.destination}")
+    print(f"preflight warnings: {len(plan.baseline_warnings)}")
+    if not include_diff:
+        print("hint: add --diff for the complete patch")
+    elif plan.diff is None:
+        print("WARN: [complete-diff-unavailable] complete diff unavailable for legacy journal")
+    else:
+        sys.stdout.write(plan.diff)
 
 
 def _land(
@@ -201,6 +218,7 @@ def _land(
     change_ref: str,
     *,
     dry_run: bool,
+    include_diff: bool,
     include_untracked: bool,
 ) -> int:
     try:
@@ -210,16 +228,27 @@ def _land(
             change_ref,
             dry_run=dry_run,
             include_untracked=include_untracked,
-            on_plan=_print_plan,
+            on_plan=lambda plan: _print_plan(plan, include_diff=include_diff),
         )
+    except LifecycleError as exc:
+        diagnostic = exc.diagnostic
+        print(f"ERROR: [{diagnostic.code}] {diagnostic.message}", file=sys.stderr)
+        if diagnostic.next_command is not None:
+            print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
+        return 1
     except TransactionError as exc:
         error_name = "TransactionError" if type(exc) is LandingError else type(exc).__name__
         print(f"ERROR: [{error_name}] {exc}", file=sys.stderr)
         return 1
     if outcome.already_landed:
-        print(f"{change_ref} already landed; no mutations")
+        diagnostic = outcome.diagnostic
+        if diagnostic is None:
+            raise AssertionError("completed landing is missing its diagnostic")
+        print(f"INFO: [{diagnostic.code}] {diagnostic.message}")
         return 0
     if dry_run:
+        for finding in outcome.plan.baseline_warnings if outcome.plan is not None else ():
+            print(f"WARN BASELINE: [{finding.code}] {finding.message}")
         print("dry-run; no mutations")
         return 0
     _print_findings(
@@ -274,6 +303,12 @@ def _transition(
             on_plan=_print_lifecycle_plan,
         )
     except LifecycleError as exc:
+        diagnostic = exc.diagnostic
+        print(f"ERROR: [{diagnostic.code}] {diagnostic.message}", file=sys.stderr)
+        if diagnostic.next_command is not None:
+            print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
+        return 1
+    except TransactionError as exc:
         print(f"ERROR: [{type(exc).__name__}] {exc}", file=sys.stderr)
         return 1
     if outcome.already_applied:
@@ -326,6 +361,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             context,
             args.change_ref,
             dry_run=args.dry_run,
+            include_diff=args.diff,
             include_untracked=args.include_untracked,
         )
     if args.command == "accept":

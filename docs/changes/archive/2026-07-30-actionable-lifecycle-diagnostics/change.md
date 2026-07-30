@@ -1,7 +1,7 @@
 ---
 id: actionable-lifecycle-diagnostics
 persistence: ephemeral
-status: proposed
+status: landed
 track: remediation
 depends_on:
   - accepted-change-state
@@ -24,12 +24,16 @@ files_owned:
 fingerprints:
   accepted-change-state: 32bc0f5591be9c6c
   mechanical-reconciliation: af4a73462f7a0b94
+accepted_at: 2026-07-30
+started_at: 2026-07-30
+landed_at: 2026-07-30
+archive_path: docs/changes/archive/2026-07-30-actionable-lifecycle-diagnostics
 ---
 # Make lifecycle diagnostics stable and actionable
 
-Status: Proposed (not accepted) · Proposed 2026-07-28
+Status: Landed · 2026-07-30
 
-**Upstream dependencies:** `accepted-change-state` is a proposed, gated prerequisite that adds the `accepted` state, the `accept` and `begin` transitions, and the shared lifecycle module this change extends. `mechanical-reconciliation` is a proposed, gated prerequisite that adds the read-only `reconcile mechanical` command, its schema-1 `ReconciliationReport`, and typed landing errors. Both must land first so diagnostics recommend only commands that actually exist and reuse the resulting lifecycle/reconciliation interfaces. No ADR governs this internal CLI behavior and no external infrastructure is required after those prerequisites land.
+**Upstream dependencies:** `accepted-change-state` is landed and adds the `accepted` state, the `accept` and `begin` transitions, and the shared lifecycle module this change extends. `mechanical-reconciliation` is landed and adds the read-only `reconcile mechanical` command, its schema-1 `ReconciliationReport`, and typed landing errors. This change reuses those landed lifecycle/reconciliation interfaces so diagnostics recommend only commands that actually exist. No ADR governs this internal CLI behavior and no external infrastructure is required.
 **Dependents:** None currently. No roadmap item or active change folder names this diagnostic taxonomy as a prerequisite.
 **Files owned:** The prerequisite-created lifecycle and reconciliation modules; landing source selection; CLI rendering for lifecycle commands; focused lifecycle, reconciliation, landing, and CLI tests; the capability and README diagnostic contract; and this change's roadmap entry. The two upstream changes own overlapping regions in every source and test file listed here and in the consumer docs. This overlap is ordered rather than concurrent: land both prerequisites, then rebase and reconcile this change against their final interfaces before implementation. Transaction journaling, graph validation, transition rules, report schema, and semantic reconciliation remain owned by the prerequisites.
 
@@ -71,14 +75,14 @@ Document the stable codes, safe fields, dry-run-first hints for proposed and acc
 
 ## Tasks
 
-1. Reconcile the landed `accepted-change-state` and `mechanical-reconciliation` interfaces and move their selected-change lookup behind one pure lifecycle classification interface without changing transition rules or report schema.
-2. Implement `LifecycleDiagnostic`, `LifecycleError`, and the ordered taxonomy above, including repository containment, active/archive distinction, tracked-only short-circuiting, total front-matter failure mapping, canonical status handling, and value-free message/hint construction.
-3. Replace landing's `_locate_source` interpretation with the shared classifier while retaining transaction-specific planning and completed-landing no-op behavior.
-4. Adapt `accept`, `begin`, and both mechanical-reconciliation formats to render the same codes and hints through their existing text/JSON interfaces; preserve the `0`/`1`/`2` exit policy.
-5. Add table-driven lifecycle tests for every code, classification precedence, ID and path forms, tracked and excluded-untracked candidates, malformed and missing front matter, archive matches, path traversal/out-of-repository references, and deterministic messages that never include raw content.
-6. Add command-level tests proving proposed errors point only to `accept`, accepted errors point only to `begin`, excluded work replays the same command with `--include-untracked`, blocked work exposes status and gate presence without a command, repeated landing is coded success, and all other classified failures are coded blockers without tracebacks.
-7. Update the capabilities and README diagnostic contract, including mechanical schema-1 embedding, then run the full test/lint/resolver gates and verify installed and vendored command behavior use the same taxonomy.
-8. On land: archive this folder through the transactional command and retain its roadmap lineage.
+1. [x] Reconcile the landed `accepted-change-state` and `mechanical-reconciliation` interfaces and move their selected-change lookup behind one pure lifecycle classification interface without changing transition rules or report schema.
+2. [x] Implement `LifecycleDiagnostic`, `LifecycleError`, and the ordered taxonomy above, including repository containment, active/archive distinction, tracked-only short-circuiting, total front-matter failure mapping, canonical status handling, and value-free message/hint construction.
+3. [x] Replace landing's `_locate_source` interpretation with the shared classifier while retaining transaction-specific planning and completed-landing no-op behavior.
+4. [x] Adapt `accept`, `begin`, and both mechanical-reconciliation formats to render the same codes and hints through their existing text/JSON interfaces; preserve the `0`/`1`/`2` exit policy.
+5. [x] Add table-driven lifecycle tests for every code, classification precedence, ID and path forms, tracked and excluded-untracked candidates, malformed and missing front matter, archive matches, path traversal/out-of-repository references, and deterministic messages that never include raw content.
+6. [x] Add command-level tests proving proposed errors point only to `accept`, accepted errors point only to `begin`, excluded work replays the same command with `--include-untracked`, blocked work exposes status and gate presence without a command, repeated landing is coded success, and all other classified failures are coded blockers without tracebacks.
+7. [x] Update the capabilities and README diagnostic contract, including mechanical schema-1 embedding, then run the full test/lint/resolver gates and verify installed and vendored command behavior use the same taxonomy.
+8. [x] On land: archive this folder through the transactional command and retain its roadmap lineage.
 
 ## Verify
 

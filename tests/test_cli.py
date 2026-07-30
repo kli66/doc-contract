@@ -716,6 +716,230 @@ def test_land_cli_preserves_transaction_error_labels(
     )
 
 
+def _lifecycle_repo(
+    root: Path,
+    status: str,
+    *,
+    tracked: bool = True,
+    gate: str | None = None,
+) -> Path:
+    _repo(root)
+    _write(
+        root,
+        "docs/roadmap.md",
+        "---\npersistence: living\n---\n# Roadmap\n\n"
+        f"- `docs/changes/example/` ({status})\n\n"
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n<!-- END GENERATED DAG -->\n",
+    )
+    gate_line = f"gated_on: {gate}\n" if gate is not None else ""
+    _write(
+        root,
+        "docs/changes/example/change.md",
+        "---\nid: example\npersistence: ephemeral\n"
+        f"status: {status}\ntrack: test\n{gate_line}---\n"
+        "# Example\n\nprivate body that diagnostics must not quote\n",
+    )
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "add", ".doc-contract.toml", "docs/roadmap.md"],
+        check=True,
+    )
+    if tracked:
+        subprocess.run(
+            ["git", "-C", str(root), "add", "docs/changes/example/change.md"],
+            check=True,
+        )
+    return root
+
+
+def test_land_cli_compact_output_and_explicit_diff(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tracked = _lifecycle_repo(tmp_path / "tracked", "in-progress")
+    base_args = [
+        "land",
+        "example",
+        "--repo-root",
+        str(tracked),
+        "--dry-run",
+    ]
+
+    assert main(base_args) == 0
+    compact = capsys.readouterr()
+    assert compact.err == ""
+    assert "land plan: example\n" in compact.out
+    assert "source: docs/changes/example\n" in compact.out
+    assert "tracking: tracked\n" in compact.out
+    assert "provisional nodes: 0\n" in compact.out
+    assert "mutations: 3 total; 2 write(s), 1 move(s)\n" in compact.out
+    assert "  write docs/changes/example/change.md\n" in compact.out
+    assert "  write docs/roadmap.md\n" in compact.out
+    assert "  move docs/changes/example -> docs/changes/archive/" in compact.out
+    assert "preflight warnings: 0\n" in compact.out
+    assert "hint: add --diff for the complete patch\n" in compact.out
+    assert "--- docs/changes/example/change.md" not in compact.out
+    assert "input/output tree:" not in compact.out
+
+    assert main([*base_args, "--diff"]) == 0
+    with_diff = capsys.readouterr()
+    assert with_diff.err == ""
+    assert "hint: add --diff" not in with_diff.out
+    assert "--- docs/changes/example/change.md\n" in with_diff.out
+    assert "rename docs/changes/example/ -> docs/changes/archive/" in with_diff.out
+
+
+def test_land_cli_dry_run_prints_provisional_nodes_and_warning_details(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    untracked = _lifecycle_repo(tmp_path / "untracked-plan", "in-progress", tracked=False)
+
+    assert (
+        main(
+            [
+                "land",
+                "example",
+                "--repo-root",
+                str(untracked),
+                "--dry-run",
+                "--include-untracked",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "tracking: untracked\n" in captured.out
+    assert "provisional nodes: 1\n" in captured.out
+    assert "  + example: docs/changes/example/change.md\n" in captured.out
+    assert "preflight warnings: 1\n" in captured.out
+    assert "WARN BASELINE: [untracked-node-included]" in captured.out
+
+
+def test_lifecycle_cli_renders_stable_codes_and_canonical_hints(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    proposed = _lifecycle_repo(tmp_path / "proposed", "proposed")
+    assert main(["begin", "example", "--repo-root", str(proposed)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "ERROR: [change-proposed-unaccepted] "
+        "change example has status=proposed and is not accepted\n"
+        "NEXT: doc-contract accept example --dry-run\n"
+    )
+    assert (
+        main(
+            [
+                "reconcile",
+                "mechanical",
+                "example",
+                "--phase",
+                "entry",
+                "--format",
+                "json",
+                "--repo-root",
+                str(proposed),
+            ]
+        )
+        == 1
+    )
+    proposed_report = json.loads(capsys.readouterr().out)
+    assert proposed_report["findings"][0] == {
+        "code": "change-proposed-unaccepted",
+        "level": "ERROR",
+        "message": "change example has status=proposed and is not accepted",
+        "scope": "change",
+        "subjects": ["example"],
+    }
+    assert proposed_report["next_command"] == "doc-contract accept example --dry-run"
+
+    accepted = _lifecycle_repo(tmp_path / "accepted", "accepted")
+    assert main(["land", "example", "--repo-root", str(accepted)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "ERROR: [change-accepted-not-started] "
+        "change example has status=accepted and has not started\n"
+        "NEXT: doc-contract begin example --dry-run\n"
+    )
+
+    blocked = _lifecycle_repo(
+        tmp_path / "blocked", "blocked", gate="private-gate-value"
+    )
+    assert main(["land", "example", "--repo-root", str(blocked)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "ERROR: [change-blocked] "
+        "change example has status=blocked; gate_present=true\n"
+    )
+    assert "private-gate-value" not in captured.err
+    assert main(["accept", "example", "--repo-root", str(blocked)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("ERROR: [change-blocked] ")
+    assert "NEXT:" not in captured.err
+
+    untracked = _lifecycle_repo(
+        tmp_path / "untracked", "in-progress", tracked=False
+    )
+    assert (
+        main(
+            [
+                "reconcile",
+                "mechanical",
+                "example",
+                "--phase",
+                "exit",
+                "--format",
+                "json",
+                "--repo-root",
+                str(untracked),
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["findings"][0]["code"] == "change-untracked-excluded"
+    assert payload["next_command"] == (
+        "doc-contract reconcile mechanical example --phase exit --include-untracked"
+    )
+
+
+def test_lifecycle_cli_invalid_and_repeated_landing_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    invalid = _lifecycle_repo(tmp_path / "invalid", "in-progress")
+    change = invalid / "docs/changes/example/change.md"
+    change.write_text(
+        "---\nid: example\nprivate-parser-fragment\n---\nprivate body\n",
+        encoding="utf-8",
+    )
+    assert main(["land", "example", "--repo-root", str(invalid)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "ERROR: [change-front-matter-invalid] "
+        "change folder docs/changes/example has invalid or ambiguous front matter\n"
+    )
+    assert "Traceback" not in captured.err
+    assert "private" not in captured.err
+
+    repeated = _lifecycle_repo(
+        tmp_path / "repeated", "in-progress", tracked=False
+    )
+    args = [
+        "land",
+        "example",
+        "--repo-root",
+        str(repeated),
+        "--include-untracked",
+    ]
+    assert main(args) == 0
+    capsys.readouterr()
+    assert main(args) == 0
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "INFO: [change-already-landed] change example has status=landed\n"
+    )
+
+
 def test_installed_and_vendored_reconciliation_work_from_unrelated_cwd(
     tmp_path: Path,
 ) -> None:
@@ -807,3 +1031,37 @@ def test_installed_and_vendored_reconciliation_work_from_unrelated_cwd(
     assert vendored.returncode == 0, vendored.stderr
     assert json.loads(vendored.stdout) == installed_payload
     assert not marker.exists()
+
+    change = repo / "docs/changes/example/change.md"
+    change.write_text(
+        change.read_text(encoding="utf-8").replace(
+            "status: accepted", "status: proposed"
+        ),
+        encoding="utf-8",
+    )
+    roadmap = repo / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8").replace("(accepted)", "(proposed)"),
+        encoding="utf-8",
+    )
+    installed_blocker = subprocess.run(
+        [sys.executable, "-m", "doc_contract.cli", *command],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    vendored_blocker = subprocess.run(
+        [sys.executable, str(launcher), *command],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert installed_blocker.returncode == vendored_blocker.returncode == 1
+    blocker_payload = json.loads(installed_blocker.stdout)
+    assert json.loads(vendored_blocker.stdout) == blocker_payload
+    assert blocker_payload["findings"][0]["code"] == "change-proposed-unaccepted"
+    assert blocker_payload["next_command"] == "doc-contract accept example --dry-run"

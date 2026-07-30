@@ -124,6 +124,7 @@ doc-contract begin docs/changes/example --repo-root /path/to/repo --dry-run
 doc-contract reconcile mechanical docs/changes/example --phase entry --format json --repo-root /path/to/repo
 doc-contract reconcile mechanical docs/changes/example --phase exit --repo-root /path/to/repo
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run
+doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --diff
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/example --repo-root /path/to/repo
 ```
@@ -137,12 +138,31 @@ move; advisory hashes are refreshed but are not landing prerequisites. Rerunning
 returns success without changing files or the Git index. Interrupted landings resume from the
 journal under Git metadata, and concurrent edits fail closed.
 
+Landing output is compact by default: the plan prints source/archive/tracking facts, provisional
+nodes, warning count, mutation type totals, and every ordered write/move path, but no content patch
+or tree hashes. Add `--diff` for the complete precomputed patch when line-level review is needed;
+the flag does not change planning, mutation, verification, or exit behavior. Dry runs print baseline
+warning details after the scope summary. New journals retain the diff for resumed output, while a
+legacy journal resumes safely and reports that its historical diff is unavailable. The journal
+schema remains private and is not a supported JSON interface.
+
 `reconcile mechanical` is the read-only deterministic half of entry/exit reconciliation. It reuses
 the `begin` or landing planner, emits schema-1 JSON or compact text, and reports scoped findings plus
 content-free plan metadata. It never runs project capabilities or tests and never writes files, the
 index, journals, or archives. A green report proves only mechanical readiness; the `/doc-contract
 reconcile semantic ...` skill still decides whether ADR meaning, scope, task completion, and durable
 knowledge are true before an explicit `begin` or `land` command.
+
+Lifecycle callers classify the selected reference before whole-repository preflight and share these
+stable codes: `change-proposed-unaccepted`, `change-accepted-not-started`, `change-blocked`,
+`change-already-landed`, `change-untracked-excluded`, `change-front-matter-missing`,
+`change-front-matter-invalid`, `change-ref-wrong-folder`, and `change-ref-unknown`. Diagnostics contain
+only normalized IDs, repository-relative paths, canonical status, and `gate_present=true|false`.
+Proposed and accepted blockers point to dry-run `accept` or `begin`; excluded untracked work replays
+the same normalized command with `--include-untracked`. Blocked, invalid, wrong-folder, unknown, and
+already-landed states never invent a next command. Repeated `land` reports
+`INFO: [change-already-landed]` and exits zero; other classified blockers report
+`ERROR: [<code>]` and exit one.
 
 The flat modules under `scripts/` and their pytest tripwires remain compatibility-only for existing
 consumers. New repositories configure `.doc-contract.toml` and invoke the packaged or vendored CLI.

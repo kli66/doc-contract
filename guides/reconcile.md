@@ -80,10 +80,11 @@ Goal: leave the durable docs true and the folder as lineage, not load-bearing.
 7. **Rerun the mechanical exit report after every semantic, code, or durable-document repair.**
    Require `ready: true` and review the final content-free plan manifest.
 8. **Land transactionally** — run `doc-contract land docs/changes/<name> --repo-root <repo> --dry-run`,
-   review the complete write/move plan and diff, then rerun without `--dry-run`. The command journals
-   each boundary, hash-checks concurrent edits, updates the roadmap and dependent fingerprints, and
-   preserves history for tracked or intentionally untracked folders. Do not hand-roll a separate
-   `git mv`/stamp/update sequence.
+   review the complete path-only write/move inventory, then add `--diff` when line-level review of
+   the complete content patch is needed. Rerun the reviewed command without `--dry-run`; `--diff`
+   changes presentation only. The command journals each boundary, hash-checks concurrent edits,
+   updates the roadmap and dependent fingerprints, and preserves history for tracked or intentionally
+   untracked folders. Do not hand-roll a separate `git mv`/stamp/update sequence.
 9. **Emit a short exit note** — what landed, which durable docs you updated, what you captured to
    memory, the archive path.
 

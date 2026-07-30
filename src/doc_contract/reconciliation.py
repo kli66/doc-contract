@@ -8,16 +8,20 @@ from typing import Literal, Sequence
 
 from .config import Settings
 from .landing import LandingError, LandingPlan, plan_landing
-from .lifecycle import LifecycleError, LifecyclePlan, TransitionAction, plan_transition
+from .lifecycle import (
+    LifecycleError,
+    LifecyclePlan,
+    LifecycleRequest,
+    TransitionAction,
+    classify_change,
+    plan_transition,
+)
 from .resolver import (
     Finding,
     Node,
-    Resolution,
-    locate_change,
-    parse_front_matter,
     resolve,
 )
-from .transaction import Mutation
+from .transaction import Mutation, TransactionError
 
 Phase = Literal["entry", "exit"]
 Scope = Literal["change", "related", "repository"]
@@ -151,39 +155,6 @@ class _Selection:
     change_id: str | None
     path: str | None
     node: Node | None
-    excluded_untracked: bool = False
-
-
-def _select(root: Path, change_ref: str, resolution: Resolution) -> _Selection:
-    try:
-        change_id, source = locate_change(root, change_ref, resolution.nodes)
-    except ValueError:
-        pass
-    else:
-        node = resolution.nodes[change_id]
-        return _Selection(change_id, source.relative_to(root).as_posix(), node)
-
-    requested = Path(change_ref).name
-    normalized = Path(change_ref).as_posix().rstrip("/")
-    for record in resolution.discovery:
-        if record.included:
-            continue
-        path = Path(record.path)
-        parent = path.parent.as_posix()
-        if (
-            record.node_id == change_ref
-            or record.node_id == requested
-            or parent == normalized
-        ):
-            return _Selection(record.node_id, parent, None, excluded_untracked=True)
-    return _Selection(None, None, None)
-
-
-def _gate_present(selection: _Selection) -> bool | None:
-    if selection.node is None or selection.node.status != "blocked":
-        return None
-    values = parse_front_matter(selection.node.path.read_text(encoding="utf-8")) or {}
-    return "gated_on" in values
 
 
 def _synthetic(
@@ -193,66 +164,6 @@ def _synthetic(
     change_id: str | None,
 ) -> Finding:
     return Finding(level, code, message, (change_id,) if change_id else ())
-
-
-def _state_finding(selection: _Selection, phase: Phase) -> tuple[Finding, str | None]:
-    change_id = selection.change_id
-    status = selection.node.status if selection.node is not None else None
-    ref = selection.path or change_id or "CHANGE"
-    if change_id is None:
-        return (
-            _synthetic("ERROR", "change-not-found", "change reference is not resolvable", None),
-            None,
-        )
-    if status == "blocked":
-        return (
-            _synthetic(
-                "ERROR",
-                "blocked-change",
-                f"{phase} reconciliation refuses blocked change {change_id}",
-                change_id,
-            ),
-            None,
-        )
-    if phase == "entry":
-        if status == "proposed":
-            return (
-                _synthetic(
-                    "ERROR",
-                    "lifecycle-ineligible",
-                    f"entry requires accepted; {change_id} is proposed",
-                    change_id,
-                ),
-                f"doc-contract accept {ref}",
-            )
-        return (
-            _synthetic(
-                "ERROR",
-                "lifecycle-ineligible",
-                f"entry requires accepted; {change_id} is {status}",
-                change_id,
-            ),
-            None,
-        )
-    if status == "accepted":
-        return (
-            _synthetic(
-                "ERROR",
-                "lifecycle-ineligible",
-                f"exit requires in-progress; {change_id} is accepted",
-                change_id,
-            ),
-            f"doc-contract begin {ref}",
-        )
-    return (
-        _synthetic(
-            "ERROR",
-            "lifecycle-ineligible",
-            f"exit requires in-progress; {change_id} is {status}",
-            change_id,
-        ),
-        None,
-    )
 
 
 def _manifest_mutations(mutations: Sequence[Mutation]) -> tuple[ManifestMutation, ...]:
@@ -357,8 +268,81 @@ def reconcile_mechanical(
 ) -> ReconciliationReport:
     """Produce a content-free readiness report without executing any mutation or capability."""
     root = root.resolve()
-    resolution = resolve(root, settings, include_untracked=include_untracked)
-    selection = _select(root, change_ref, resolution)
+    request = (
+        LifecycleRequest.RECONCILE_ENTRY
+        if phase == "entry"
+        else LifecycleRequest.RECONCILE_EXIT
+    )
+    try:
+        classified = classify_change(
+            root,
+            settings,
+            change_ref,
+            action=request,
+            include_untracked=include_untracked,
+        )
+    except LifecycleError as exc:
+        selection = _Selection(exc.change_id, exc.path, None)
+        finding = _synthetic(
+            "ERROR",
+            exc.diagnostic.code,
+            exc.diagnostic.message,
+            exc.change_id,
+        )
+        return ReconciliationReport(
+            phase=phase,
+            ready=False,
+            change_id=exc.change_id,
+            change_path=exc.path,
+            change_status=exc.status,
+            next_command=exc.diagnostic.next_command,
+            findings=_scope_findings(selection, (finding,)),
+            manifest=ReconciliationManifest(),
+            gate_present=exc.gate_present,
+        )
+    except TransactionError as exc:
+        code, separator, _ = str(exc).partition(":")
+        finding = _synthetic(
+            "ERROR",
+            code if separator else "lifecycle-failed",
+            str(exc),
+            None,
+        )
+        return ReconciliationReport(
+            phase=phase,
+            ready=False,
+            change_id=None,
+            change_path=None,
+            change_status=None,
+            next_command=None,
+            findings=_scope_findings(_Selection(None, None, None), (finding,)),
+            manifest=ReconciliationManifest(),
+        )
+    try:
+        resolution = resolve(root, settings, include_untracked=include_untracked)
+    except (OSError, ValueError):
+        selection = _Selection(classified.change_id, classified.path, None)
+        finding = _synthetic(
+            "ERROR",
+            "preflight-invalid",
+            "repository preflight failed",
+            classified.change_id,
+        )
+        return ReconciliationReport(
+            phase=phase,
+            ready=False,
+            change_id=classified.change_id,
+            change_path=classified.path,
+            change_status=classified.status,
+            next_command=None,
+            findings=_scope_findings(selection, (finding,)),
+            manifest=ReconciliationManifest(),
+        )
+    selection = _Selection(
+        classified.change_id,
+        classified.path,
+        resolution.nodes.get(classified.change_id),
+    )
     findings: list[Finding] = list(resolution.findings)
     manifest = ReconciliationManifest(
         provisional_nodes=tuple(
@@ -366,23 +350,21 @@ def reconcile_mechanical(
         )
     )
     next_command: str | None = None
-    status = selection.node.status if selection.node is not None else None
-    eligible = status == ("accepted" if phase == "entry" else "in-progress")
+    status = classified.status
+    phase_eligible = status == ("accepted" if phase == "entry" else "in-progress")
+    eligible = phase_eligible and not resolution.errors
 
-    if not eligible:
-        if selection.excluded_untracked:
-            findings.append(
-                _synthetic(
-                    "ERROR",
-                    "untracked-change-excluded",
-                    "untracked change is excluded; rerun with --include-untracked",
-                    selection.change_id,
-                )
+    if not phase_eligible:
+        findings.append(
+            _synthetic(
+                "ERROR",
+                "lifecycle-ineligible",
+                f"{phase} reconciliation is already past status={status}",
+                selection.change_id,
             )
-        else:
-            state_finding, next_command = _state_finding(selection, phase)
-            findings.append(state_finding)
-    elif phase == "entry":
+        )
+
+    if eligible and phase == "entry":
         try:
             plan = plan_transition(
                 root,
@@ -395,8 +377,8 @@ def reconcile_mechanical(
             findings.append(
                 _synthetic(
                     "ERROR",
-                    str(exc).partition(":")[0] or "transition-failed",
-                    str(exc),
+                    exc.diagnostic.code,
+                    exc.diagnostic.message,
                     selection.change_id,
                 )
             )
@@ -404,14 +386,24 @@ def reconcile_mechanical(
             findings.extend(plan.current_findings)
             findings.extend(plan.projected_findings)
             manifest = _entry_manifest(plan)
-            next_command = f"doc-contract begin {plan.source}"
-    else:
+            if plan.source_status == "accepted":
+                next_command = f"doc-contract begin {plan.source}"
+    elif eligible:
         try:
             plan = plan_landing(
                 root,
                 settings,
                 change_ref,
                 include_untracked=include_untracked,
+            )
+        except LifecycleError as exc:
+            findings.append(
+                _synthetic(
+                    "ERROR",
+                    exc.diagnostic.code,
+                    exc.diagnostic.message,
+                    selection.change_id,
+                )
             )
         except LandingError as exc:
             findings.extend(exc.findings)
@@ -438,5 +430,5 @@ def reconcile_mechanical(
         next_command=next_command,
         findings=scoped,
         manifest=manifest,
-        gate_present=_gate_present(selection),
+        gate_present=None,
     )

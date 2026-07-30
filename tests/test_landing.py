@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 from pathlib import Path
 
@@ -14,9 +15,11 @@ from doc_contract.landing import (
     ConcurrentModification,
     InjectedInterruption,
     LandingError,
+    LandingPlan,
     execute_landing,
     plan_landing,
 )
+from doc_contract.lifecycle import LifecycleError
 from doc_contract.resolver import Finding, fingerprint, resolve
 from doc_contract.transaction import TransactionError
 
@@ -91,6 +94,64 @@ def test_dry_run_is_immutable_and_printable(tmp_path: Path) -> None:
     assert roadmap.read_bytes() == before_roadmap
     assert source.is_dir()
     assert not list((root / ".git").glob("doc-contract/land-*.json"))
+
+
+def test_landing_journal_round_trip_retains_diff_and_reads_legacy_shape(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    plan = plan_landing(
+        root,
+        _settings(root),
+        "transactional",
+        date="2026-07-23",
+        include_untracked=True,
+    )
+
+    raw = plan.as_dict()
+    assert raw["diff"] == plan.diff
+    assert LandingPlan.from_dict(raw).diff == plan.diff
+
+    del raw["diff"]
+    assert LandingPlan.from_dict(raw).diff is None
+
+
+def test_legacy_journal_resume_reports_unavailable_diff(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _repo(tmp_path)
+    with pytest.raises(InjectedInterruption):
+        execute_landing(
+            root,
+            _settings(root),
+            "transactional",
+            date="2026-07-23",
+            include_untracked=True,
+            fault_after=1,
+        )
+    journal = next((root / ".git").glob("doc-contract/land-*.json"))
+    payload = json.loads(journal.read_text(encoding="utf-8"))
+    del payload["diff"]
+    journal.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "land",
+                "transactional",
+                "--repo-root",
+                str(root),
+                "--include-untracked",
+                "--diff",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert (
+        "WARN: [complete-diff-unavailable] complete diff unavailable for legacy journal\n"
+        in captured.out
+    )
+    assert (root / "docs/changes/archive/2026-07-23-transactional/change.md").is_file()
 
 
 def test_journal_failure_happens_before_first_mutation(
@@ -228,9 +289,14 @@ def test_landing_requires_in_progress_status(tmp_path: Path, status: str) -> Non
         roadmap.read_text(encoding="utf-8").replace("(in-progress)", f"({status})"),
         encoding="utf-8",
     )
-    expected = "blocked-change" if status == "blocked" else "lifecycle-ineligible"
-    with pytest.raises(LandingError, match=expected):
+    expected = {
+        "proposed": "change-proposed-unaccepted",
+        "accepted": "change-accepted-not-started",
+        "blocked": "change-blocked",
+    }[status]
+    with pytest.raises(LifecycleError) as captured:
         plan_landing(root, _settings(root), "transactional", date="2026-07-23", include_untracked=True)
+    assert captured.value.diagnostic.code == expected
 
 
 def test_interruption_resumes_at_mutation_boundary(tmp_path: Path) -> None:
@@ -374,12 +440,13 @@ def test_failed_final_offline_validation_retains_journal(
         nonlocal calls
         calls += 1
         result = real_resolve(*args, **kwargs)
-        if calls == 3:
+        if calls == 2:
             result.findings.append(
                 Finding("ERROR", "final-offline-error", "final offline validation failed")
             )
         return result
 
+    monkeypatch.setattr("doc_contract.lifecycle.resolve", fail_final_resolution)
     monkeypatch.setattr("doc_contract.landing.resolve", fail_final_resolution)
     outcome = execute_landing(
         root,
@@ -389,7 +456,7 @@ def test_failed_final_offline_validation_retains_journal(
         include_untracked=True,
     )
 
-    assert calls == 3
+    assert calls == 2
     assert outcome.verification is not None
     assert outcome.verification.offline_status == "offline failed"
     assert outcome.capability_status == "live skipped"

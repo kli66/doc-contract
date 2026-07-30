@@ -1,7 +1,7 @@
 ---
 id: concise-landing-output
 persistence: ephemeral
-status: proposed
+status: landed
 track: remediation
 depends_on:
   - transactional-land-command
@@ -18,10 +18,14 @@ files_owned:
   - README.md
   - SKILL.md
   - docs/roadmap.md
+accepted_at: 2026-07-30
+started_at: 2026-07-30
+landed_at: 2026-07-30
+archive_path: docs/changes/archive/2026-07-30-concise-landing-output
 ---
 # Make landing output concise by default
 
-Status: Proposed (not accepted) · Proposed 2026-07-28
+Status: Landed · 2026-07-30
 
 **Upstream dependencies:** `transactional-land-command` is landed and supplies the immutable
 `LandingPlan`, complete precomputed diff, preflight warning baseline, provisional-node preview,
@@ -109,28 +113,28 @@ adapter, or transactional safety check.
 
 ## Tasks
 
-1. Add the presentation-only `--diff` parser flag and refactor the CLI renderer into deterministic
+1. [x] Add the presentation-only `--diff` parser flag and refactor the CLI renderer into deterministic
    compact-summary, optional-diff, and warning-reporting paths without changing the command set or
    engine callback boundary.
-2. Render every planned mutation path in order and aggregate write/move counts from the existing
+2. [x] Render every planned mutation path in order and aggregate write/move counts from the existing
    immutable `Mutation` objects; include source, archive, tracking, provisional nodes, and preflight
    warning count while omitting hashes and document contents from the default summary.
-3. Preserve dry-run warning actionability by printing the existing value-free baseline findings
+3. [x] Preserve dry-run warning actionability by printing the existing value-free baseline findings
    after the compact plan; preserve the current post-apply baseline/new/resolved report without
    duplicating preflight warning details during a normal mutated landing.
-4. Add the precomputed diff as an optional private journal field and restore it on resume. Keep old
+4. [x] Add the precomputed diff as an optional private journal field and restore it on resume. Keep old
    journals readable and resumable; make `--diff` on a legacy journal explicitly report that the
    complete historical patch is unavailable while continuing the transaction safely.
-5. Add CLI tests for default and `--diff` dry runs, tracked and intentionally untracked plans,
+5. [x] Add CLI tests for default and `--diff` dry runs, tracked and intentionally untracked plans,
    provisional-node and warning rendering, stdout/stderr placement, absence of hashes and diff
    hunks by default, exact diff presence when requested, and unchanged exit/mutation behavior.
-6. Add landing serialization/resume tests proving new journals retain the exact diff, legacy
+6. [x] Add landing serialization/resume tests proving new journals retain the exact diff, legacy
    journals remain readable, interruption recovery remains idempotent, and the presentation flag
    never changes mutation bytes, journal boundaries, or final verification.
-7. Update `docs/spec/capabilities.md`, `AGENTS.template.md`, `guides/reconcile.md`, `README.md`, and
+7. [x] Update `docs/spec/capabilities.md`, `AGENTS.template.md`, `guides/reconcile.md`, `README.md`, and
    `SKILL.md` with the compact-default and `--diff` review contract; keep `land` as the same
    capability heading because this is an option, not a new command.
-8. Run the package and compatibility gates, then land through the transactional command and retain
+8. [x] Run the package and compatibility gates, then land through the transactional command and retain
    this proposal as archived lineage with the roadmap regenerated.
 
 ## Verify
