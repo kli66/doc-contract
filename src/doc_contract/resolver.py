@@ -278,6 +278,7 @@ class Finding:
     level: str  # "ERROR" | "WARN"
     code: str
     message: str
+    subjects: tuple[str, ...] = ()
 
 
 @dataclass
@@ -454,6 +455,7 @@ def discover(
                     "WARN",
                     "untracked-node-included",
                     f"{node_id} ({relative}) is included provisionally; add it to Git before landing",
+                    (node_id,),
                 )
             )
             return True
@@ -462,6 +464,7 @@ def discover(
                 "WARN",
                 "untracked-node-excluded",
                 f"{relative} is untracked and excluded; rerun with --include-untracked to preview it",
+                (node_id,),
             )
         )
         return False
@@ -748,6 +751,7 @@ def validate(
                         "ERROR",
                         "unknown-dependency",
                         f"{n.id} depends_on unknown id {e.target!r}",
+                        (n.id, e.target),
                     )
                 )
                 continue
@@ -757,6 +761,7 @@ def validate(
                         "ERROR",
                         "missing-adr",
                         f"{n.id} depends_on {e.target} but {target.path} is missing",
+                        (n.id, e.target),
                     )
                 )
             if e.requires_status and (target.status or "") != e.requires_status:
@@ -766,6 +771,7 @@ def validate(
                         "requires-status",
                         f"{n.id} requires {e.target} status={e.requires_status!r} "
                         f"but it is {target.status!r}",
+                        (n.id, e.target),
                     )
                 )
             state = hash_state(e.fingerprint)
@@ -776,6 +782,7 @@ def validate(
                         f"edge-hash-{state.value}",
                         f"{n.id} → {e.target}: fingerprint is {state.value}; "
                         f"review the target and run `doc-contract stamp {n.id}`",
+                        (n.id, e.target),
                     )
                 )
             if state == HashState.VALID and n.active and target.path.exists():
@@ -787,6 +794,7 @@ def validate(
                             "suspect-link",
                             f"{n.id} → {e.target}: target changed since review "
                             f"(recorded {e.fingerprint}, now {current}); re-review and re-stamp",
+                            (n.id, e.target),
                         )
                     )
             # Structural dependency edges are always mandatory. Review fingerprints are optional
@@ -802,6 +810,7 @@ def validate(
                         "missing-fingerprint",
                         f"{n.id} → {e.target}: active doc-edge has no fingerprint "
                         f"(edge_fingerprints is required — stamp the target's content hash)",
+                        (n.id, e.target),
                     )
                 )
 
@@ -813,6 +822,7 @@ def validate(
                     "ERROR",
                     "missing-persistence",
                     f"{n.id} ({n.path}) declares no `persistence` class",
+                    (n.id,),
                 )
             )
         elif n.persistence not in PERSISTENCE_CLASSES:
@@ -822,6 +832,7 @@ def validate(
                     "bad-persistence",
                     f"{n.id} persistence={n.persistence!r} "
                     f"not one of {sorted(PERSISTENCE_CLASSES)}",
+                    (n.id,),
                 )
             )
 
@@ -835,6 +846,7 @@ def validate(
                     "unknown-change-status",
                     f"{n.id} has unsupported change status {n.status!r}; "
                     f"expected one of {sorted(CHANGE_STATUSES)}",
+                    (n.id,),
                 )
             )
 
@@ -851,6 +863,7 @@ def validate(
                     "WARN",
                     "unstamped-frozen",
                     f"{n.id} ({n.path.name}) is frozen but records no self_hash",
+                    (n.id,),
                 )
             )
         elif state in {HashState.EMPTY, HashState.PENDING, HashState.INVALID}:
@@ -860,6 +873,7 @@ def validate(
                     f"hash-{state.value}",
                     f"{n.id} ({n.path.name}) self_hash is {state.value}; "
                     f"review the frozen document and run `doc-contract stamp {n.id}`",
+                    (n.id,),
                 )
             )
         elif n.self_hash != fingerprint(n.path.read_text(encoding="utf-8")):
@@ -869,6 +883,7 @@ def validate(
                     "self-hash-mismatch",
                     f"{n.id} ({n.path.name}): body changed since self_hash was stamped "
                     f"(frozen/append-only) — re-review and re-stamp if the edit was intended",
+                    (n.id,),
                 )
             )
 
@@ -885,6 +900,7 @@ def validate(
                     "ERROR",
                     "no-roadmap-line",
                     f"active change {n.id} has no line in docs/roadmap.md",
+                    (n.id,),
                 )
             )
 
@@ -901,6 +917,7 @@ def validate(
                     "WARN",
                     "owned-file-missing",
                     f"{n.id} declares missing owned path {relative}; create it or update files_owned",
+                    (n.id,),
                 )
             )
             continue
@@ -911,12 +928,15 @@ def validate(
                     "ERROR",
                     "roadmap-status-mismatch",
                     f"{n.id}: front-matter status={n.status!r} but roadmap line reads {rstatus!r}",
+                    (n.id,),
                 )
             )
 
     # Cycle (WARN).
     if cycle:
-        findings.append(Finding("WARN", "cycle", f"dependency cycle among: {cycle}"))
+        findings.append(
+            Finding("WARN", "cycle", f"dependency cycle among: {cycle}", tuple(cycle))
+        )
 
     # File-ownership overlap among IN-PROGRESS change nodes (WARN — real merge hazard). A merge
     # conflict needs two branches editing one file *concurrently*, i.e. two `in-progress` changes;
@@ -937,6 +957,7 @@ def validate(
                     "WARN",
                     "ownership-overlap",
                     f"{path} claimed by concurrent in-progress changes: {sorted(owning)}",
+                    tuple(sorted(owning)),
                 )
             )
 
@@ -951,6 +972,7 @@ def validate(
                     "orphan-reference",
                     f"frozen reference {n.path.name} is cited by zero live ADRs — a human "
                     f"decides: archive (dead) or cite it (forward-looking reference)",
+                    (n.id,),
                 )
             )
 

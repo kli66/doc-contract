@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 
 from . import __version__
 from .config import ConfigError, Settings, load_settings, resolve_repo_root
@@ -17,11 +18,15 @@ from .lifecycle import (
     TransitionAction,
     execute_transition,
 )
+from .reconciliation import Phase, ReconciliationReport, reconcile_mechanical
 from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap
 from .sync import sync_package
+from .transaction import TransactionError
 from .verification import VerificationPolicy, verify
 
-COMMANDS = frozenset({"check", "update", "stamp", "sync", "accept", "begin", "land"})
+COMMANDS = frozenset(
+    {"check", "update", "stamp", "sync", "accept", "begin", "reconcile", "land"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +58,19 @@ def build_parser() -> argparse.ArgumentParser:
     stamp = subparsers.add_parser("stamp", parents=[common], help="refresh a node's hashes")
     stamp.add_argument("node_id")
     subparsers.add_parser("sync", parents=[common], help="vendor this pinned package")
+    reconcile = subparsers.add_parser(
+        "reconcile", help="report deterministic reconciliation readiness"
+    )
+    reconcile_kinds = reconcile.add_subparsers(dest="reconcile_kind", required=True)
+    mechanical = reconcile_kinds.add_parser(
+        "mechanical", parents=[common], help="produce a read-only mechanical report"
+    )
+    mechanical.add_argument(
+        "change_ref", help="change ID or repository-relative change folder"
+    )
+    mechanical.add_argument("--phase", choices=("entry", "exit"), required=True)
+    mechanical.add_argument("--format", choices=("text", "json"), default="text")
+    mechanical.add_argument("--include-untracked", action="store_true")
     land = subparsers.add_parser("land", parents=[common], help="transactionally archive a change")
     land.add_argument("change_ref", help="change ID or repository-relative change folder")
     land.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
@@ -143,6 +161,28 @@ def _sync(context: Context) -> int:
     return 0
 
 
+def _reconcile(
+    context: Context,
+    change_ref: str,
+    *,
+    phase: str,
+    output_format: str,
+    include_untracked: bool,
+) -> int:
+    report: ReconciliationReport = reconcile_mechanical(
+        context.root,
+        context.settings,
+        change_ref,
+        phase=cast(Phase, phase),
+        include_untracked=include_untracked,
+    )
+    if output_format == "json":
+        print(json.dumps(report.as_dict(), sort_keys=True, separators=(",", ":")))
+    else:
+        print(report.render_text(), end="")
+    return 0 if report.ready else 1
+
+
 def _print_plan(plan: LandingPlan) -> None:
     if plan.provisional_nodes:
         print("untracked discovery preview (no mutation yet):")
@@ -172,8 +212,9 @@ def _land(
             include_untracked=include_untracked,
             on_plan=_print_plan,
         )
-    except LandingError as exc:
-        print(f"ERROR: [{type(exc).__name__}] {exc}", file=sys.stderr)
+    except TransactionError as exc:
+        error_name = "TransactionError" if type(exc) is LandingError else type(exc).__name__
+        print(f"ERROR: [{error_name}] {exc}", file=sys.stderr)
         return 1
     if outcome.already_landed:
         print(f"{change_ref} already landed; no mutations")
@@ -270,6 +311,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _stamp(context, args.node_id)
     if args.command == "sync":
         return _sync(context)
+    if args.command == "reconcile":
+        if args.reconcile_kind != "mechanical":
+            raise AssertionError(args.reconcile_kind)
+        return _reconcile(
+            context,
+            args.change_ref,
+            phase=args.phase,
+            output_format=args.format,
+            include_untracked=args.include_untracked,
+        )
     if args.command == "land":
         return _land(
             context,

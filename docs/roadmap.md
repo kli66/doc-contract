@@ -44,7 +44,7 @@ persistence: living
 
 ## Lifecycle
 
-- `docs/changes/mechanical-reconciliation/` (proposed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
+- `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
@@ -57,7 +57,7 @@ flowchart TD
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
     global_cwd_independent_cli["global-cwd-independent-cli (landed)"]
     landed_graph_transition_ownership["landed-graph-transition-ownership (landed)"]
-    mechanical_reconciliation["mechanical-reconciliation (proposed)"]
+    mechanical_reconciliation["mechanical-reconciliation (landed)"]
     optional_project_memory["optional-project-memory (proposed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]

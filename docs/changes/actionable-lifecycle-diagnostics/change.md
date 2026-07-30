@@ -23,6 +23,7 @@ files_owned:
   - docs/roadmap.md
 fingerprints:
   accepted-change-state: 32bc0f5591be9c6c
+  mechanical-reconciliation: af4a73462f7a0b94
 ---
 # Make lifecycle diagnostics stable and actionable
 

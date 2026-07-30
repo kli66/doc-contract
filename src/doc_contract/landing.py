@@ -29,7 +29,6 @@ from .transaction import (
     file_hash as _file_hash,
     git_metadata_path,
     load_journal,
-    optional_str as _optional_str,
     required_str as _required_str,
     save_journal as _save_journal,
     sha as _sha,
@@ -40,7 +39,23 @@ from .transaction import (
 from .verification import VerificationOutcome, VerificationPolicy, WarningDelta, verify
 
 JOURNAL_SCHEMA = 2
-LandingError = TransactionError
+__all__ = ["ConcurrentModification", "InjectedInterruption", "LandingError"]
+
+
+class LandingError(TransactionError):
+    """A stable landing-planning failure with optional resolver evidence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        findings: tuple[Finding, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        prefix, separator, _ = message.partition(":")
+        self.code = code or (prefix if separator else "landing-failed")
+        self.findings = findings
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +202,7 @@ def _diff_for(path: str, before: str, after: str) -> str:
     )
 
 
-def plan_landing(
+def _plan_landing(
     root: Path,
     settings: Settings,
     ref: str,
@@ -198,9 +213,15 @@ def plan_landing(
     root = root.resolve()
     result = resolve(root, settings, include_untracked=include_untracked)
     if result.errors:
-        raise LandingError("preflight-invalid: repository has resolver errors")
+        raise LandingError(
+            "preflight-invalid: repository has resolver errors",
+            findings=tuple(result.errors),
+        )
     if len(result.topo_order) != len(result.nodes):
-        raise LandingError("preflight-invalid: dependency graph contains a cycle")
+        raise LandingError(
+            "preflight-invalid: dependency graph contains a cycle",
+            findings=tuple(finding for finding in result.findings if finding.code == "cycle"),
+        )
     requested = Path(ref).name
     if not include_untracked and any(
         not record.included
@@ -279,7 +300,10 @@ def plan_landing(
     )
     diff_parts.append(_diff_for(settings.roadmap, current_roadmap, roadmap_new))
     if projection.resolution.errors:
-        raise LandingError("preflight-invalid: planned repository state fails validation")
+        raise LandingError(
+            "preflight-invalid: planned repository state fails validation",
+            findings=tuple(projection.resolution.errors),
+        )
     before_tree = _tree_hash(source)
     after_tree = _tree_hash_with(source, {"change.md": new_change.encode("utf-8")})
     mutations.append(Mutation("move", source_rel, archive_rel, after_tree, after_tree))
@@ -301,6 +325,28 @@ def plan_landing(
         ),
         baseline_warnings=tuple(result.warnings),
     )
+
+
+def plan_landing(
+    root: Path,
+    settings: Settings,
+    ref: str,
+    *,
+    date: str | None = None,
+    include_untracked: bool = False,
+) -> LandingPlan:
+    try:
+        return _plan_landing(
+            root,
+            settings,
+            ref,
+            date=date,
+            include_untracked=include_untracked,
+        )
+    except LandingError:
+        raise
+    except TransactionError as exc:
+        raise LandingError(str(exc)) from None
 
 
 def _load_journal(path: Path) -> tuple[LandingPlan, list[int]]:

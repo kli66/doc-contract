@@ -1,7 +1,7 @@
 ---
 id: mechanical-reconciliation
 persistence: ephemeral
-status: proposed
+status: landed
 track: lifecycle
 depends_on:
   - accepted-change-state
@@ -25,12 +25,16 @@ files_owned:
   - docs/roadmap.md
 fingerprints:
   accepted-change-state: 32bc0f5591be9c6c
+accepted_at: 2026-07-29
+started_at: 2026-07-29
+landed_at: 2026-07-30
+archive_path: docs/changes/archive/2026-07-30-mechanical-reconciliation
 ---
 # Add deterministic mechanical reconciliation
 
-Status: Proposed (not accepted) · Proposed 2026-07-28
+Status: Landed · 2026-07-30
 
-**Upstream dependencies:** `accepted-change-state` is proposed and must land first. It owns the lifecycle state model `proposed --accept--> accepted --begin--> in-progress --land--> landed`, leaves the existing `blocked` state under semantic/manual handling, and supplies the canonical `src/doc_contract/lifecycle.py` interface: `TransitionAction`, immutable `LifecyclePlan`, `plan_transition(...)`, and `execute_transition(...)`. This change consumes `plan_transition(..., action=TransitionAction.BEGIN)` for entry readiness and must not recreate lifecycle selection, transition, mutation, or journal logic. Design and isolated report tests are available now; entry integration is gated until that interface lands. No ADR or external infrastructure gates the work.
+**Upstream dependencies:** `accepted-change-state` is landed. It owns the lifecycle state model `proposed --accept--> accepted --begin--> in-progress --land--> landed`, leaves the existing `blocked` state under semantic/manual handling, and supplies the canonical `src/doc_contract/lifecycle.py` interface: `TransitionAction`, immutable `LifecyclePlan`, `plan_transition(...)`, and `execute_transition(...)`. This change consumes `plan_transition(..., action=TransitionAction.BEGIN)` for entry readiness and must not recreate lifecycle selection, transition, mutation, or journal logic. No ADR or external infrastructure gates the work.
 
 **Dependents:** None currently. The semantic `/doc-contract reconcile` skill workflow will consume this command, but it is updated by this same change rather than represented as a separate DAG node.
 
@@ -62,15 +66,15 @@ Update `COMMANDS`, CLI help, the capability heading/tripwire expectation, vendor
 
 ## Tasks
 
-1. Land and reconcile `accepted-change-state`, then rebase this change and consume its exact `TransitionAction.BEGIN`/`LifecyclePlan` interface; do not duplicate ref selection, state validation, transition projection, mutations, or journaling.
-2. Add subject IDs to resolver findings and focused regressions for edge, roadmap, owned-path, cycle, and ownership findings, keeping existing text and constructor compatibility where no subjects are supplied.
-3. Make landing planning expose stable typed blocker codes and attached resolver findings while preserving current CLI text and transactional behavior; do not change `plan_landing` archive, projection, diff, tracking, or mutation semantics.
-4. Implement `ReconciliationReport` and the read-only phase dispatcher: entry wraps one `BEGIN` plan, exit wraps one landing plan, phase-specific policy promotes selected missing owned paths only at exit, and both produce the same content-free manifest and scoped findings.
-5. Add the nested CLI grammar, compact text renderer, versioned JSON renderer, exit-code policy, `--include-untracked` handling, and explicit refusal to run capability subprocesses or mutate any filesystem/Git state.
-6. Update the semantic skill workflow and durable documentation with the mechanical-first sequence, explicit semantic-only judgments, compatibility alias, accepted/begin/in-progress/land ordering, and rerun requirement after semantic repairs.
-7. Add unit and integration tests for report scoping and serialization, entry/exit planner parity, lifecycle-state diagnostics, advisory/required fingerprints, roadmap mismatch, dependency failure, projected ownership overlap, phase-specific file existence, untracked discovery, archive collision, partial tracking, global blockers, unrelated warning compaction, and byte/mtime/index/journal immutability.
-8. Exercise installed and synced vendored commands from an unrelated cwd, verify the capability coverage tripwire and explicit `COMMANDS` assertion include only the top-level `reconcile` name, and confirm text/JSON contain no file contents, diffs, subprocess output, command arguments, or secret values.
-9. On land: archive this folder through `doc-contract land`, regenerate the roadmap DAG, and retain the mechanical/semantic split in durable repository documentation; no external project-memory write is required.
+1. [x] Consume the landed `accepted-change-state` change's exact `TransitionAction.BEGIN`/`LifecyclePlan` interface; do not duplicate ref selection, state validation, transition projection, mutations, or journaling.
+2. [x] Add subject IDs to resolver findings and focused regressions for edge, roadmap, owned-path, cycle, and ownership findings, keeping existing text and constructor compatibility where no subjects are supplied.
+3. [x] Make landing planning expose stable typed blocker codes and attached resolver findings while preserving current CLI text and transactional behavior; do not change `plan_landing` archive, projection, diff, tracking, or mutation semantics.
+4. [x] Implement `ReconciliationReport` and the read-only phase dispatcher: entry wraps one `BEGIN` plan, exit wraps one landing plan, phase-specific policy promotes selected missing owned paths only at exit, and both produce the same content-free manifest and scoped findings.
+5. [x] Add the nested CLI grammar, compact text renderer, versioned JSON renderer, exit-code policy, `--include-untracked` handling, and explicit refusal to run capability subprocesses or mutate any filesystem/Git state.
+6. [x] Update the semantic skill workflow and durable documentation with the mechanical-first sequence, explicit semantic-only judgments, compatibility alias, accepted/begin/in-progress/land ordering, and rerun requirement after semantic repairs.
+7. [x] Add unit and integration tests for report scoping and serialization, entry/exit planner parity, lifecycle-state diagnostics, advisory/required fingerprints, roadmap mismatch, dependency failure, projected ownership overlap, phase-specific file existence, untracked discovery, archive collision, partial tracking, global blockers, unrelated warning compaction, and byte/mtime/index/journal immutability.
+8. [x] Exercise installed and synced vendored commands from an unrelated cwd, verify the capability coverage tripwire and explicit `COMMANDS` assertion include only the top-level `reconcile` name, and confirm text/JSON contain no file contents, diffs, subprocess output, command arguments, or secret values.
+9. [x] On land: archive this folder through `doc-contract land`, regenerate the roadmap DAG, and retain the mechanical/semantic split in durable repository documentation; no external project-memory write is required.
 
 ## Verify
 

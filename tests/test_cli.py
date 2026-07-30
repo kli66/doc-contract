@@ -16,6 +16,7 @@ import doc_contract.sync as sync_runtime
 from doc_contract.cli import COMMANDS, main
 from doc_contract.config import load_settings
 from doc_contract.resolver import fingerprint, resolve
+from doc_contract.transaction import TransactionError
 
 
 def _write(root: Path, relative: str, content: str) -> Path:
@@ -623,6 +624,8 @@ def test_packaged_sync_produces_vendored_verification_from_unrelated_cwd(
     assert vendored_version.stdout.strip() == manifest["version"]
     assert "doc_contract/verification.py" in manifest["files"]
     assert (repo / ".doc-contract/vendor/doc_contract/verification.py").is_file()
+    assert "doc_contract/reconciliation.py" in manifest["files"]
+    assert (repo / ".doc-contract/vendor/doc_contract/reconciliation.py").is_file()
 
     checked = subprocess.run(
         [
@@ -664,4 +667,143 @@ def test_packaged_sync_produces_vendored_verification_from_unrelated_cwd(
 
 
 def test_capability_surface_is_explicit() -> None:
-    assert COMMANDS == {"check", "update", "stamp", "sync", "accept", "begin", "land"}
+    assert COMMANDS == {
+        "check",
+        "update",
+        "stamp",
+        "sync",
+        "accept",
+        "begin",
+        "reconcile",
+        "land",
+    }
+
+
+def test_land_cli_preserves_transaction_error_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path / "repo")
+
+    class PlannerTransactionError(TransactionError):
+        pass
+
+    def fail_with_planner_error(*_args: object, **_kwargs: object) -> None:
+        raise PlannerTransactionError("tracking-state-unavailable: test")
+
+    monkeypatch.setattr(cli_runtime, "execute_landing", fail_with_planner_error)
+    assert main(["land", "example", "--repo-root", str(repo)]) == 1
+    assert capsys.readouterr().err == (
+        "ERROR: [PlannerTransactionError] tracking-state-unavailable: test\n"
+    )
+
+    def fail_with_landing_error(*_args: object, **_kwargs: object) -> None:
+        raise cli_runtime.LandingError("destination-collision: test")
+
+    monkeypatch.setattr(cli_runtime, "execute_landing", fail_with_landing_error)
+    assert main(["land", "example", "--repo-root", str(repo)]) == 1
+    assert capsys.readouterr().err == "ERROR: [TransactionError] destination-collision: test\n"
+
+    class CustomLandingError(cli_runtime.LandingError):
+        pass
+
+    def fail_with_custom_landing_error(*_args: object, **_kwargs: object) -> None:
+        raise CustomLandingError("destination-collision: custom")
+
+    monkeypatch.setattr(cli_runtime, "execute_landing", fail_with_custom_landing_error)
+    assert main(["land", "example", "--repo-root", str(repo)]) == 1
+    assert capsys.readouterr().err == (
+        "ERROR: [CustomLandingError] destination-collision: custom\n"
+    )
+
+
+def test_installed_and_vendored_reconciliation_work_from_unrelated_cwd(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    marker = repo / "capability-ran"
+    _write(
+        repo,
+        ".doc-contract.toml",
+        _config(
+            capability_mode="optional",
+            capability_command=(
+                sys.executable,
+                "-c",
+                f"open({str(marker)!r}, 'w').write('ran')",
+            ),
+        ),
+    )
+    _write(
+        repo,
+        "docs/roadmap.md",
+        "---\npersistence: living\n---\n# Roadmap\n\n"
+        "- `docs/changes/example/` (accepted)\n\n"
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n<!-- END GENERATED DAG -->\n",
+    )
+    _write(
+        repo,
+        "docs/changes/example/change.md",
+        "---\nid: example\npersistence: ephemeral\nstatus: accepted\ntrack: test\n---\n"
+        "# Example\n\nStatus: Accepted · 2026-07-29\n",
+    )
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    clean_environment = os.environ.copy()
+    clean_environment.pop("PYTHONPATH", None)
+    command = [
+        "reconcile",
+        "mechanical",
+        "example",
+        "--phase",
+        "entry",
+        "--format",
+        "json",
+        "--repo-root",
+        str(repo),
+    ]
+
+    installed = subprocess.run(
+        [sys.executable, "-m", "doc_contract.cli", *command],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert installed.returncode == 0, installed.stderr
+    installed_payload = json.loads(installed.stdout)
+    assert installed_payload["ready"] is True
+    assert installed_payload["kind"] == "mechanical"
+    assert not marker.exists()
+
+    synced = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "doc_contract.cli",
+            "sync",
+            "--repo-root",
+            str(repo),
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert synced.returncode == 0, synced.stderr
+    launcher = repo / ".doc-contract/doc_contract_cli.py"
+    vendored = subprocess.run(
+        [sys.executable, str(launcher), *command],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert vendored.returncode == 0, vendored.stderr
+    assert json.loads(vendored.stdout) == installed_payload
+    assert not marker.exists()

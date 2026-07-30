@@ -104,16 +104,21 @@ A `HANDOFF-*.md` (if one is ever handed to you) is ephemeral scaffolding for the
 the durable home for open work; ADRs + `docs/roadmap.md` are the source of truth.
 
 **On entry, before touching code:**
-1. Check the change's references for consistency against the ADRs (`docs/adr/`) and `docs/roadmap.md`
+1. Run `doc-contract reconcile mechanical <change> --phase entry --format json`, then check the
+   change's references for consistency against the ADRs (`docs/adr/`) and `docs/roadmap.md`
    — do the task IDs, decisions, file paths, and status claims still match?
 2. If material drift has occurred, reconcile it (update the affected ADRs + roadmap first) so you
-   start from an accurate map. If a change's detail *contradicts* an ADR, **stop and surface it**.
+   start from an accurate map, then rerun the mechanical command. If a change's detail
+   *contradicts* an ADR, **stop and surface it**. Mechanical readiness never replaces this judgment.
 3. Resolve the change with `--include-untracked` when it is still provisional. The preflight reports
    missing `files_owned` paths, untracked nodes, and dependency/hash drift before implementation.
 
 **On exit, before handing off or finishing:**
-1. Update the ADRs + `docs/roadmap.md` to reflect task completion status.
-2. On land, `git mv docs/changes/<name>/` → `docs/changes/archive/<date>-<name>/`; capture durable
+1. Run `doc-contract reconcile mechanical <change> --phase exit --format json`.
+2. Reconcile semantic ADR, roadmap, task, and durable-document claims with the implementation; if
+   anything needs repair, make it, then rerun the mechanical command. A green report does not prove
+   the implementation or durable documents satisfy intent.
+3. On land, `git mv docs/changes/<name>/` → `docs/changes/archive/<date>-<name>/`; capture durable
    findings into ADRs / `docs/spec/` / project memory first, so the archived folder is lineage.
 
 **Dependency-chain rule.** Every change declares its **upstream dependencies** (`depends_on`, *one
@@ -149,8 +154,9 @@ Once the repository's agent setup loads this contract, dispatch collapses to one
 **"Execute `docs/changes/<name>/`."** Before dispatch, only an explicit user or reviewer instruction
 authorizes `doc-contract accept`; the command records `accepted` but cannot infer authority. Run
 `doc-contract begin` only after entry reconciliation, and begin refuses proposed, blocked, and
-landed changes. The supported sequence is author → explicit acceptance → `accept` → entry
-reconciliation → `begin` → work → exit reconciliation → `land`. Landing is completed
+landed changes. The supported sequence is author → explicit acceptance → `accept` → mechanical then
+semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →
+`land`. Landing is completed
 through `doc-contract land <folder> --dry-run` followed by the reviewed command without `--dry-run`.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns

@@ -35,6 +35,18 @@ Start work on one accepted change by transitioning it to `in-progress`, preservi
 `accepted_at` date and recording `started_at`. It refuses proposed, blocked, and landed changes,
 is idempotent when already in progress, and never runs the target capability subprocess.
 
+### `reconcile`
+
+The `mechanical` grammar reports deterministic entry or exit readiness without writing files, changing the Git index,
+creating journals, moving archives, running capability subprocesses, or invoking project tests.
+Entry reuses the `begin` planner exactly once; exit reuses the landing planner exactly once. The
+schema-1 JSON and compact text formats expose only selected identity/status, scoped structured
+findings, content-free mutation paths, provisional nodes, tracking/archive metadata, and the next
+lifecycle command. They never expose mutation content, unified diffs, capability arguments/output,
+secret values, or arbitrary `gated_on` text. A blocked change reports only whether that key is
+present. Exit code `0` means mechanically ready, `1` means deterministic blockers remain, and `2`
+means CLI or configuration failure.
+
 ### `sync`
 
 Vendor the complete running package into `.doc-contract/vendor/` and write a deterministic
@@ -47,9 +59,11 @@ and repeating the command without a package change does not rewrite files.
 
 Plan and apply a hash-guarded, resumable change landing. It previews the complete write/move set with `--dry-run`, journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`; the plan prints those nodes before mutation, and the outcome reports baseline, new, and resolved warning counts. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op.
 
-The supported lifecycle is author → explicit user/reviewer acceptance → `accept` → entry
-reconciliation → `begin` → work → exit reconciliation → `land`. Deterministic transitions do not
-claim semantic judgment; blocked changes remain under their existing manual process.
+The supported lifecycle is author → explicit user/reviewer acceptance → `accept` → mechanical then
+semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →
+`land`. Mechanical readiness is evidence only: it never accepts work, judges meaning or task
+completion, repairs drift, or authorizes mutation. Blocked changes remain under their existing
+manual semantic process.
 
 ## Verification matrix
 

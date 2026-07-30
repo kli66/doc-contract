@@ -23,14 +23,15 @@ Invoke as `/doc-contract <sub-command> [args]`. The first token selects the oper
 |-----------|--------------|
 | `/doc-contract check` | Run the resolver + tripwires; report ERROR/WARN findings. See **Run it** below. |
 | `/doc-contract new-change <intent>` | Author a well-formed `docs/changes/<name>/` folder from a raw intent, grounded in the ADRs + roadmap + code, stopping at `Proposed`. **Read and follow `guides/new-change.md`.** |
-| `/doc-contract reconcile <folder> [entry\|exit]` | The MANDATORY entry/exit drift-check against the ADRs + roadmap. **Read and follow `guides/reconcile.md`.** |
+| `/doc-contract reconcile semantic <folder> [entry\|exit]` | The MANDATORY judgment-heavy entry/exit drift-check. The slash form without `semantic` remains a compatibility alias. **Read and follow `guides/reconcile.md`.** |
+| `doc-contract reconcile mechanical CHANGE --phase {entry,exit}` | Read-only deterministic readiness evidence consumed by the semantic workflow |
 | `/doc-contract land <folder> [--dry-run]` | Apply the transactional landing boundary after reconciliation: status, roadmap, fingerprints, journaling, and archive movement. Preview first. |
 | `/doc-contract accept CHANGE [--dry-run] [--include-untracked]` | Record explicit user/reviewer acceptance |
 | `/doc-contract begin CHANGE [--dry-run] [--include-untracked]` | Start work on an accepted change |
 | `/doc-contract install` | Materialize the skill into another repo. See **Install into a new repo** below. |
 
 If no sub-command is given, infer intent from the request (a raw intent to build → `new-change`;
-picking up or landing a change → `reconcile`; "are the docs consistent?" → `check`). The two lifecycle
+picking up or landing a change → semantic `reconcile`; "are the docs consistent?" → `check`). The two lifecycle
 guides are the authoring/reconcile front-end to the *same* machinery `check` runs — one system, one
 skill, distinct verbs.
 
@@ -84,6 +85,8 @@ doc-contract update --repo-root /path/to/repo
 doc-contract update --repo-root /path/to/repo --include-untracked
 doc-contract accept docs/changes/<name> --repo-root /path/to/repo --dry-run
 doc-contract begin docs/changes/<name> --repo-root /path/to/repo --dry-run
+doc-contract reconcile mechanical docs/changes/<name> --phase entry --format json --repo-root /path/to/repo
+doc-contract reconcile mechanical docs/changes/<name> --phase exit --format json --repo-root /path/to/repo
 doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run
 doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/<name> --repo-root /path/to/repo

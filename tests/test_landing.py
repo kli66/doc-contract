@@ -18,6 +18,7 @@ from doc_contract.landing import (
     plan_landing,
 )
 from doc_contract.resolver import Finding, fingerprint, resolve
+from doc_contract.transaction import TransactionError
 
 
 def _write(root: Path, relative: str, content: str) -> Path:
@@ -188,8 +189,30 @@ def test_partial_tracking_is_rejected(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _write(root, "docs/changes/transactional/notes.md", "notes\n")
     _git(root, "add", "docs/changes/transactional/change.md")
-    with pytest.raises(LandingError, match="partial-tracking"):
+    with pytest.raises(LandingError, match="partial-tracking") as captured:
         plan_landing(root, _settings(root), "transactional", date="2026-07-23")
+    assert captured.value.code == "partial-tracking"
+    assert captured.value.findings == ()
+
+
+def test_plan_landing_wraps_non_landing_transaction_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+
+    class PlannerTransactionError(TransactionError):
+        pass
+
+    def fail_planner(*_args: object, **_kwargs: object) -> None:
+        raise PlannerTransactionError("tracking-state-unavailable: test")
+
+    monkeypatch.setattr("doc_contract.landing._plan_landing", fail_planner)
+
+    with pytest.raises(LandingError) as captured:
+        plan_landing(root, _settings(root), "transactional")
+
+    assert str(captured.value) == "tracking-state-unavailable: test"
+    assert captured.value.code == "tracking-state-unavailable"
 
 
 @pytest.mark.parametrize("status", ["proposed", "accepted", "blocked"])

@@ -121,6 +121,8 @@ doc-contract stamp CHANGE_ID --repo-root /path/to/repo
 doc-contract sync --repo-root /path/to/repo
 doc-contract accept docs/changes/example --repo-root /path/to/repo --dry-run
 doc-contract begin docs/changes/example --repo-root /path/to/repo --dry-run
+doc-contract reconcile mechanical docs/changes/example --phase entry --format json --repo-root /path/to/repo
+doc-contract reconcile mechanical docs/changes/example --phase exit --repo-root /path/to/repo
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/example --repo-root /path/to/repo
@@ -134,6 +136,13 @@ provisional `--include-untracked` planning. `land` accepts only `in-progress` ch
 move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
 returns success without changing files or the Git index. Interrupted landings resume from the
 journal under Git metadata, and concurrent edits fail closed.
+
+`reconcile mechanical` is the read-only deterministic half of entry/exit reconciliation. It reuses
+the `begin` or landing planner, emits schema-1 JSON or compact text, and reports scoped findings plus
+content-free plan metadata. It never runs project capabilities or tests and never writes files, the
+index, journals, or archives. A green report proves only mechanical readiness; the `/doc-contract
+reconcile semantic ...` skill still decides whether ADR meaning, scope, task completion, and durable
+knowledge are true before an explicit `begin` or `land` command.
 
 The flat modules under `scripts/` and their pytest tripwires remain compatibility-only for existing
 consumers. New repositories configure `.doc-contract.toml` and invoke the packaged or vendored CLI.

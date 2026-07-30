@@ -481,6 +481,10 @@ def test_landing_projection_reports_unknown_and_cyclic_graph(tmp_path: Path) -> 
         planned_roadmap_text=roadmap,
     )
 
+    by_code = {finding.code: finding for finding in projection.resolution.findings}
+    assert by_code["unknown-dependency"].subjects == ("first", "missing")
+    assert by_code["cycle"].subjects == ("first", "second")
+
     assert {finding.code for finding in projection.findings} >= {"unknown-dependency", "cycle"}
     assert projection.resolution.topo_order == ("source",)
 

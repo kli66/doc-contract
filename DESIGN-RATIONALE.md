@@ -55,5 +55,11 @@ OpenSpec/OpenLore as tools. Two independent reasons, either sufficient:
 - **Canonicalization stays deliberately syntactic.** Front matter, line endings, per-line trailing
   whitespace, and boundary blank lines are normalized. Prose reflow and Markdown formatter syntax
   rewrites change the hash; the stdlib resolver does not embed a partial Markdown semantic parser.
+- **Mechanical reconciliation is evidence, not judgment.** The packaged command composes the
+  resolver with the existing lifecycle and landing planners and returns a read-only, content-free
+  readiness report. The skill retains the semantic work: interpreting ADR meaning, classifying
+  drift versus contradiction, judging scope and task completion, and ensuring the archive carries
+  no unique durable knowledge. Keeping those seams separate makes the deterministic module deeper
+  without pretending prose judgment is executable validation.
 - The **product** positioning (tkcs vs OpenLore/OpenSpec/the RAG shortlist) is a separate decision,
   recorded in the consuming repo at `docs/adr/0011-positioning-vs-sdd-agent-memory-and-rag-landscape.md`.
