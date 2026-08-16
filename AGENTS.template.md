@@ -104,6 +104,7 @@ A `HANDOFF-*.md` (if one is ever handed to you) is ephemeral scaffolding for the
 the durable home for open work; ADRs + `docs/roadmap.md` are the source of truth.
 
 **On entry, before touching code:**
+
 1. Run `doc-contract reconcile mechanical <change> --phase entry --format json`, then check the
    change's references for consistency against the ADRs (`docs/adr/`) and `docs/roadmap.md`
    — do the task IDs, decisions, file paths, and status claims still match?
@@ -114,6 +115,7 @@ the durable home for open work; ADRs + `docs/roadmap.md` are the source of truth
    missing `files_owned` paths, untracked nodes, and dependency/hash drift before implementation.
 
 **On exit, before handing off or finishing:**
+
 1. Run `doc-contract reconcile mechanical <change> --phase exit --format json`.
 2. Reconcile semantic ADR, roadmap, task, and durable-document claims with the implementation; if
    anything needs repair, make it, then rerun the mechanical command. A green report does not prove
@@ -147,19 +149,29 @@ significant and change the hash. A fingerprint rides the *depender*; a `self_has
 The entry/exit steps above are the *standing* protocol — identical for every change — so a dispatch
 prompt never restates them. Work mechanics are also standing: `git mv` to preserve history; keep the
 test + lint gate green at each boundary; preserve task detail verbatim; docs/conventions only unless
-the change says otherwise; don't commit unless asked; stop and surface any instruction that
-contradicts the ADRs / roadmap / code.
+the change says otherwise; after successful landing, create exactly one final commit unless the
+dispatch explicitly says not to; stop and surface any instruction that contradicts the ADRs /
+roadmap / code.
+
+The final commit message follows these standing rules:
+
+- Use a Conventional Commits header, limited to 50 characters.
+- Wrap body lines at 72 characters.
+- Keep the body concise and under 100 words. State what changed without unnecessary implementation
+  detail; omit the body when the header is sufficient.
 
 Once the repository's agent setup loads this contract, dispatch collapses to one line:
-**"Execute `docs/changes/<name>/`."** Before dispatch, only an explicit user or reviewer instruction
-authorizes `doc-contract accept`; the command records `accepted` but cannot infer authority. Run
+**"Execute `docs/changes/<name>/`."** That dispatch authorizes implementation, verification,
+transactional landing, and the final commit described above. Before dispatch, only an explicit user
+or reviewer instruction authorizes `doc-contract accept`; the command records `accepted` but cannot
+infer authority. Run
 `doc-contract begin` only after entry reconciliation, and begin refuses proposed, blocked, and
 landed changes. The supported sequence is author → explicit acceptance → `accept` → mechanical then
 semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →
-`land`. Landing is completed through a compact scope review with `doc-contract land <folder>
---dry-run`; add `--diff` when line-level review of the complete patch is needed, then run the reviewed
-command without `--dry-run`. The flag changes presentation only and does not weaken or strengthen the
-transaction boundary.
+`land` → final commit. Landing is completed through a compact scope review with `doc-contract land
+<folder> --dry-run`; add `--diff` when line-level review of the complete patch is needed, then run the
+reviewed command without `--dry-run`. The flag changes presentation only and does not weaken or
+strengthen the transaction boundary.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns
 the status, roadmap, fingerprint, journal, and archive boundaries.
