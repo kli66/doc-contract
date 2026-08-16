@@ -10,14 +10,24 @@ working directory cannot silently resolve an empty or unrelated tree.
 
 ## Set up a fresh repository
 
-Install the package wherever the setup command will run:
+Before installing anything, check whether a working system-level CLI is already available:
+
+```console
+command -v doc-contract
+doc-contract --version
+```
+
+If both commands succeed, reuse that CLI and do not install another copy. Only when it is
+unavailable or unusable should you install the package wherever the setup command will run:
 
 ```console
 pip install /path/to/doc-contracts
 doc-contract --version
 ```
 
-The runtime package has no third-party dependencies. Python 3.12 or newer is required.
+Downstream setup should always prefer the system-level CLI. Do not create or use a repository-
+vendored runtime unless the user specifically requests one. The runtime package has no third-party
+dependencies. Python 3.12 or newer is required.
 
 Create `.doc-contract.toml` in the target repository:
 
@@ -59,8 +69,10 @@ From any working directory, validate the explicitly selected repository:
 doc-contract check --repo-root /path/to/repo --offline
 ```
 
-To keep an air-gapped copy in the target, sync while the package is available and then run the
-generated launcher. The second command needs only the target repository and Python:
+Only when the user specifically requests a vendored or air-gapped install, sync while the package
+is available and then run the generated launcher. Otherwise, keep using the system-level CLI and
+do not create `.doc-contract/` or `.doc-contract-manifest.json`. The second command needs only the
+target repository and Python:
 
 ```console
 doc-contract sync --repo-root /path/to/repo

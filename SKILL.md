@@ -99,11 +99,14 @@ doc-contract land docs/changes/<name> --repo-root /path/to/repo
 CLI command within that workflow: it writes the optional vendored runtime, not the operating
 contract or agent-client integration.
 
-To turn a bare repository into one under doc-contract:
+To turn a bare repository into one under doc-contract, prefer a system-level `doc-contract` CLI
+over a repository-vendored runtime. Do not create or use a vendored install unless the user
+specifically requests one.
 
-1. **Make the package available.** Use `pip install /path/to/doc-contracts` for setup and normal
-   automation. A later `doc-contract sync --repo-root /path/to/repo` can create an air-gapped
-   vendor tree and pin manifest.
+1. **Reuse the CLI before installing.** Before installing anything, run `command -v doc-contract`
+   and `doc-contract --version`. If both succeed, reuse that system-level command and do not install
+   another copy. Only when the CLI is unavailable or unusable should you run
+   `pip install /path/to/doc-contracts` for setup and normal automation.
 2. **Write `.doc-contract.toml`.** Declare `schema_version`, `repo_name`, `roadmap`, and
    `root_nodes`. Every root is required unless its ID appears in `optional_roots`; the roadmap is
    always required. Dependency topology is mandatory, while review fingerprints default to
@@ -116,12 +119,13 @@ To turn a bare repository into one under doc-contract:
 4. **Seed the roadmap.** Create `docs/roadmap.md` with a `persistence: living` header and the two
    generated-DAG markers. Run `doc-contract update --repo-root /path/to/repo` after the configuration and
    initial documents are valid.
-5. **Optionally vendor the runtime.** Run `doc-contract sync --repo-root /path/to/repo` while the
-   package is available. Thereafter the repository can run
-   `python /path/to/repo/.doc-contract/doc_contract_cli.py ...` without the package installation.
+5. **Vendor only on explicit request.** If the user specifically requests a vendored or air-gapped
+   install, run `doc-contract sync --repo-root /path/to/repo` while the package is available.
+   Thereafter the repository can run `python /path/to/repo/.doc-contract/doc_contract_cli.py ...`
+   without the package installation. Otherwise, do not run `sync` or create vendored runtime files.
 6. **Green the gate.** From any directory, run
-   `doc-contract check --repo-root /path/to/repo --offline` or the vendored equivalent, plus the
-   repository's own test suite. The first run surfaces every
+   `doc-contract check --repo-root /path/to/repo --offline`, or the vendored equivalent only when
+   the user requested vendoring, plus the repository's own test suite. The first run surfaces every
    unclassified doc (`missing-persistence`) — add the `persistence:` headers it names.
 
 Repositories already using the flat modules in `scripts/` may retain them and their pytest
