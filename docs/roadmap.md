@@ -28,6 +28,7 @@ persistence: living
 
 ## Architecture
 
+- `docs/changes/reflect-project-evidence/` (proposed) — add project-scoped, evidence-backed reflection that keeps semantic source/analyzer adapters outside the deterministic stdlib resolver and emits only governed reports and remediation proposals; depends on the portable install boundary, unified verification guardrails, and explicit accepted state
 - `docs/changes/archive/2026-07-29-accepted-change-state/` (landed) — add explicit `accepted`, `accept`, and `begin` transitions, reusable transactional lifecycle planning, and in-progress-only landing; depends on the landed transaction and graph-projection boundaries
 - `docs/changes/archive/2026-07-24-landed-graph-transition-ownership/` (landed) — move projected landed document
   state, topology, roadmap rendering, and validation behind one resolver-owned operation; depends on
@@ -44,6 +45,7 @@ persistence: living
 
 ## Lifecycle
 
+- `docs/changes/canonicalize-roadmap-status-transitions/` (proposed) — make `accept` and `begin` canonicalize every validator-supported source-status presentation for their permitted transition instead of failing after a zero-substitution rewrite; depends on accepted state and resolver-owned graph projection
 - `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
 - `docs/changes/review-bound-acceptance-plan/` (proposed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
@@ -54,6 +56,7 @@ flowchart TD
     accepted_change_state["accepted-change-state (landed)"]
     actionable_lifecycle_diagnostics["actionable-lifecycle-diagnostics (landed)"]
     always_valid_repository_settings["always-valid-repository-settings (landed)"]
+    canonicalize_roadmap_status_transitions["canonicalize-roadmap-status-transitions (proposed)"]
     concise_landing_output["concise-landing-output (landed)"]
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]
@@ -63,6 +66,7 @@ flowchart TD
     optional_project_memory["optional-project-memory (proposed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     proportional_accepted_work_contract["proportional-accepted-work-contract (proposed)"]
+    reflect_project_evidence["reflect-project-evidence (proposed)"]
     reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]
     review_bound_acceptance_plan["review-bound-acceptance-plan (proposed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
@@ -70,8 +74,10 @@ flowchart TD
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
     vendored_runtime_closure["vendored-runtime-closure (landed)"]
     accepted_change_state --> actionable_lifecycle_diagnostics
+    accepted_change_state --> canonicalize_roadmap_status_transitions
     accepted_change_state --> mechanical_reconciliation
     accepted_change_state --> proportional_accepted_work_contract
+    accepted_change_state --> reflect_project_evidence
     accepted_change_state --> review_bound_acceptance_plan
     actionable_lifecycle_diagnostics --> review_bound_acceptance_plan
     discovery_lifecycle_hardening --> edge_fingerprint_policy
@@ -81,16 +87,19 @@ flowchart TD
     edge_fingerprint_policy --> unified_offline_live_verification
     global_cwd_independent_cli --> transactional_land_command
     landed_graph_transition_ownership --> accepted_change_state
+    landed_graph_transition_ownership --> canonicalize_roadmap_status_transitions
     mechanical_reconciliation --> actionable_lifecycle_diagnostics
     mechanical_reconciliation --> proportional_accepted_work_contract
     mechanical_reconciliation --> review_bound_acceptance_plan
     portable_install_contract_convergence --> always_valid_repository_settings
     portable_install_contract_convergence --> optional_project_memory
+    portable_install_contract_convergence --> reflect_project_evidence
     portable_install_contract_convergence --> vendored_runtime_closure
     secret_handling_guardrails --> global_cwd_independent_cli
     secret_handling_guardrails --> reuse_document_discovery_for_secret_scanning
     transactional_land_command --> accepted_change_state
     transactional_land_command --> concise_landing_output
     transactional_land_command --> discovery_lifecycle_hardening
+    unified_offline_live_verification --> reflect_project_evidence
 ```
 <!-- END GENERATED DAG -->

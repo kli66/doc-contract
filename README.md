@@ -199,3 +199,6 @@ make build
 
 Use Conventional Commits such as `feat: add a command` or `fix: reject a stale journal` so
 `make bump` can select the next release level automatically.
+
+## Dev dogfooding
+run `uv tool install --editable . --reinstall` in the project
