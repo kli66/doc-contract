@@ -6,6 +6,10 @@ persistence: living
 
 ## CLI commands
 
+This section documents only the installed or vendored `doc-contract` executable. The
+`/doc-contract new-change <intent>` authoring workflow belongs to the agent skill and is
+intentionally not an executable CLI command; it will not appear in `doc-contract --help`.
+
 ### `check`
 
 Resolve and validate the document graph, required repository boundary, frozen-document hashes, and value-free secret scan. One ordered managed-document discovery result supplies both graph validation and scanning; repository source, `.env`, generated output, dependency trees, and checked-out submodules are not separate scan inputs. The shared verification boundary runs the configured project capability command unless `--offline` is selected; target project modules are never imported into the resolver process.

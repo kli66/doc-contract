@@ -124,6 +124,10 @@ An executed command reports `live passed` on zero exit, `live failed` on nonzero
 
 ## Commands
 
+The commands below are the installed or vendored `doc-contract` executable's runtime interface.
+The authoring workflow is separate: use `/doc-contract new-change <intent>` in an agent session.
+`new-change` is intentionally not a shell subcommand and will not appear in `doc-contract --help`.
+
 ```console
 doc-contract check --repo-root /path/to/repo --offline
 doc-contract check --repo-root /path/to/repo --offline --include-untracked
@@ -201,4 +205,5 @@ Use Conventional Commits such as `feat: add a command` or `fix: reject a stale j
 `make bump` can select the next release level automatically.
 
 ## Dev dogfooding
+
 run `uv tool install --editable . --reinstall` in the project

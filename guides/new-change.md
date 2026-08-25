@@ -1,11 +1,17 @@
 # `doc-contract new-change` — author a change (inverse of dispatch)
 
+**Interface note:** this is the `/doc-contract` **agent-skill** workflow, not a subcommand of the
+installed or vendored `doc-contract` executable. Use `/doc-contract new-change <intent>` inside an
+agent session. `doc-contract --help` will not list `new-change`; the executable is reserved for
+deterministic repository operations such as `check`, `accept`, `begin`, `reconcile mechanical`,
+and `land`.
+
 Invoked as `/doc-contract new-change <intent>`. The contract (`AGENTS.md`) collapses *executing* a
 change to one line — "Execute `docs/changes/<name>/`" — because the standing protocol is auto-loaded.
 This sub-command is the missing other half: turning a raw intent into a well-formed change folder that
 is *ready* to dispatch.
 
-**This authors; it does not execute.** It stops at a `Status: Proposed (not accepted)` folder for
+This authors; it does not execute. It stops at a `Status: Proposed (not accepted)` folder for
 review. An explicit user or reviewer instruction authorizes `doc-contract accept`; lifecycle:
 `/doc-contract new-change <intent>` → explicit acceptance → `doc-contract accept` → entry
 reconciliation → `doc-contract begin` → "Execute `docs/changes/<name>/`".
@@ -28,7 +34,7 @@ live map:
   whether ADR-N already exists** — an ADR is often *design-pinned ahead of build* (status
   `proposed — implementation deferred`). If it exists, this is an **implement**, not an author: the
   change *builds* the pinned design and **amends the ADR on land** (status → accepted/built); it does
-  not re-create it. Mis-reading implement-as-author is a common framing error.
+  not re-create it. Misreading implement-as-author is a common framing error.
 - `docs/spec/*.md` deferred registers, if the repo keeps any — if the intent is *already* a parked
   entry there, this is a **promote-and-strike**, not a fresh idea: carry the entry's detail into the
   folder and strike it from the register.
@@ -96,6 +102,7 @@ N. On land: amend ADR-XXXX; archive this folder per the contract; capture the se
 
 Use today's date for `<YYYY-MM-DD>` (do not guess — read it from the session/context). Status is not
 binary:
+
 - **`Proposed (not accepted)`** — fully buildable now; waiting only on review.
 - **`Blocked on <input>`** — no part can start until a named input lands.
 - **Partially gated** — the common real case: part of the scope is buildable now, part waits on an
@@ -141,6 +148,7 @@ entry, strike it there and note the promotion.
 ## Step 6 — hand back (do not execute)
 
 Report:
+
 1. The weight decision and why.
 2. The folder path + a tight summary of the `change.md` (Why / Δ / key tasks).
 3. The grounded dependency block — call out any gated inputs and any drift/contradiction found.

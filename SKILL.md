@@ -1,6 +1,6 @@
 ---
 name: doc-contract
-description: The portable doc-contract system for a repo's docs — an enforcement resolver + coverage tripwires plus the change lifecycle, driven by a sub-command passed as the first arg. Sub-commands - `check` (run the change-DAG resolver + tripwires), `new-change <intent>` (author a docs/changes/<name>/ folder; triggers "propose a change", "new change", "start work on X"), `reconcile <folder> [entry|exit]` (the MANDATORY drift-check on picking up or landing a change; triggers "reconcile", "pick up the change", "land the change", "archive the change"), `accept <folder>` (record explicit acceptance), `begin <folder>` (start work on an accepted change), `land <folder>` (transactionally archive a completed change), `install` (materialize the skill into another repo). Use for any of these, or when asked about the doc taxonomy / change-DAG / capability tripwire. The invariant package is configured per repository by `.doc-contract.toml`.
+description: The portable doc-contract system for a repo's docs — an enforcement resolver + coverage tripwires plus the change lifecycle. The `/doc-contract` agent skill provides judgment-heavy authoring and reconciliation workflows; the installed `doc-contract` executable provides deterministic repository operations. Skill sub-commands - `check` (run the change-DAG resolver + tripwires), `new-change <intent>` (author a docs/changes/<name>/ folder; triggers "propose a change", "new change", "start work on X"), `reconcile <folder> [entry|exit]` (the MANDATORY drift-check on picking up or landing a change; triggers "reconcile", "pick up the change", "land the change", "archive the change"), `accept <folder>` (record explicit acceptance), `begin <folder>` (start work on an accepted change), `land <folder>` (transactionally archive a completed change), `install` (materialize the skill into another repo). Use for any of these, or when asked about the doc taxonomy / change-DAG / capability tripwire. The invariant package is configured per repository by `.doc-contract.toml`.
 ---
 
 # doc-contract — the doc-contract system as one skill
@@ -15,12 +15,30 @@ It is **tool-agnostic** — the installed or vendored `doc-contract` command has
 runtime dependencies. Colleagues who do not use this skill still get the discipline through the
 CLI and the `AGENTS.md` contract. The skill supplies authoring workflows; it is not the runtime.
 
-## Sub-commands (dispatch on the first arg)
+## Skill and CLI boundary
 
-Invoke as `/doc-contract <sub-command> [args]`. The first token selects the operation:
+There are two deliberately distinct interfaces with similar names:
+
+- `/doc-contract <sub-command>` is the **agent skill**. It includes judgment-heavy workflows such as
+  `/doc-contract new-change <intent>` and `/doc-contract reconcile semantic <folder> [entry|exit]`.
+  These workflows read and reason over ADRs, the roadmap, source ownership, dependents, and project
+  conventions. They are instructions for an agent and are not executable Python CLI commands.
+- `doc-contract <sub-command>` is the **installed or vendored CLI**. It provides deterministic,
+  offline-capable repository operations such as `check`, `update`, `stamp`, `sync`, mechanical
+  `reconcile`, `accept`, `begin`, and `land`.
+
+In particular, `new-change` is skill-only for now. Do not expect `doc-contract new-change` to appear
+in `doc-contract --help` or to work as a shell command. Use `/doc-contract new-change <intent>` when
+an agent session is available; it authors a proposed folder and stops before acceptance or execution.
+
+## Skill sub-commands (dispatch on the first arg)
+
+The entries prefixed with `/doc-contract` below are agent-skill workflows. The entries prefixed with
+`doc-contract` are executable CLI commands; the distinction is intentional. In particular,
+`/doc-contract new-change` is not the same interface as a shell command named `doc-contract new-change`.
 
 | invocation | what it does |
-|-----------|--------------|
+| ----------- | -------------- |
 | `/doc-contract check` | Run the resolver + tripwires; report ERROR/WARN findings. See **Run it** below. |
 | `/doc-contract new-change <intent>` | Author a well-formed `docs/changes/<name>/` folder from a raw intent, grounded in the ADRs + roadmap + code, stopping at `Proposed`. **Read and follow `guides/new-change.md`.** |
 | `/doc-contract reconcile semantic <folder> [entry\|exit]` | The MANDATORY judgment-heavy entry/exit drift-check. The slash form without `semantic` remains a compatibility alias. **Read and follow `guides/reconcile.md`.** |
@@ -37,7 +55,7 @@ skill, distinct verbs.
 
 ## Layout
 
-```
+```text
 doc-contracts distribution/
   SKILL.md                      this workflow dispatcher
   AGENTS.template.md            portable operating contract
@@ -60,7 +78,7 @@ target repository. `scripts/config.py` remains only for legacy vendored tests an
 `.doc-contract.toml` contract (all read by the invariant core):
 
 | name | what it is |
-|------|------------|
+| ------ | ------------ |
 | `schema_version` | configuration grammar version; currently `1` |
 | `repo_name` | cosmetic repository label |
 | `roadmap` | repo-relative roadmap path; always required |
@@ -72,7 +90,7 @@ target repository. `scripts/config.py` remains only for legacy vendored tests an
 
 ## Run it — `check` (in this repo)
 
-```
+```console
 # full gate
 uv run pytest -q
 
