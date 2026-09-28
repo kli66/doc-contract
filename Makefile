@@ -1,9 +1,5 @@
 .PHONY: bump test check build clean help
 
-## bump   — bump the VCS version from conventional commits, update CHANGELOG, and create a tag
-bump:
-	uv run --group lint cz bump --changelog
-
 ## test   — run the complete test suite
 test:
 	uv run --group test pytest -q
@@ -24,3 +20,10 @@ clean:
 .DEFAULT_GOAL := help
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //'
+
+
+bump: ## Bump from conventional commits, update the changelog, and create a tag
+	uv run --only-group lint cz bump --changelog
+
+bump-dry-run: ## Preview the next version without changing files or tag
+	uv run --only-group  lint cz bump --dry-run --yes
