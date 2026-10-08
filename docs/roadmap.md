@@ -45,7 +45,7 @@ persistence: living
 
 ## Lifecycle
 
-- `docs/changes/canonicalize-roadmap-status-transitions/` (proposed) — make `accept` and `begin` canonicalize every validator-supported source-status presentation for their permitted transition instead of failing after a zero-substitution rewrite; depends on accepted state and resolver-owned graph projection
+- `docs/changes/archive/2026-10-08-canonicalize-roadmap-status-transitions/` (landed) — make `accept` and `begin` canonicalize every validator-supported source-status presentation for their permitted transition instead of failing after a zero-substitution rewrite; depends on accepted state and resolver-owned graph projection
 - `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
 - `docs/changes/review-bound-acceptance-plan/` (proposed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
@@ -56,7 +56,7 @@ flowchart TD
     accepted_change_state["accepted-change-state (landed)"]
     actionable_lifecycle_diagnostics["actionable-lifecycle-diagnostics (landed)"]
     always_valid_repository_settings["always-valid-repository-settings (landed)"]
-    canonicalize_roadmap_status_transitions["canonicalize-roadmap-status-transitions (proposed)"]
+    canonicalize_roadmap_status_transitions["canonicalize-roadmap-status-transitions (landed)"]
     concise_landing_output["concise-landing-output (landed)"]
     discovery_lifecycle_hardening["discovery-lifecycle-hardening (landed)"]
     edge_fingerprint_policy["edge-fingerprint-policy (landed)"]

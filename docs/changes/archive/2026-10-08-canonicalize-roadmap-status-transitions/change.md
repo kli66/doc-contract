@@ -1,7 +1,7 @@
 ---
 id: canonicalize-roadmap-status-transitions
 persistence: ephemeral
-status: proposed
+status: landed
 track: lifecycle
 depends_on:
   - accepted-change-state
@@ -13,10 +13,14 @@ files_owned:
   - tests/test_lifecycle.py
   - docs/spec/capabilities.md
   - docs/roadmap.md
+accepted_at: 2026-10-08
+started_at: 2026-10-08
+landed_at: 2026-10-08
+archive_path: docs/changes/archive/2026-10-08-canonicalize-roadmap-status-transitions
 ---
 # Canonicalize roadmap status during lifecycle transitions
 
-Status: Proposed (not accepted) · Proposed 2026-08-03
+Status: Landed · 2026-10-08
 
 **Upstream dependencies:** `accepted-change-state` is landed and owns the explicit `proposed -> accepted -> in-progress -> landed` lifecycle plus the resolver-owned acceptance/start projection. `landed-graph-transition-ownership` is landed and establishes that projected document state, roadmap rendering, and validation belong behind one resolver boundary. Both inputs are available. No ADR, external service, live input, or third-party dependency gates implementation.
 
@@ -48,13 +52,13 @@ The underlying cause is unchanged: acceptance is supposed to update the selected
 
 ## Tasks
 
-1. Define the roadmap status span used by transition projection from the same supported source-status forms that validation recognizes for each permitted transition; do not create a second list that can drift independently.
-2. Update `_roadmap_transition_text` so `accept` canonicalizes supported proposed presentations — including the case-varied `(Proposed, not accepted)`, the comma-qualified `(proposed, depends on …)`, and the space-qualified `(proposed foundation)` forms observed in production — and `begin` canonicalizes supported accepted presentations, replacing the whole recognized presentation and preserving all prose outside it byte-for-byte.
-3. Require proof that exactly one unambiguous selected-node status span changed. If the node line is found but its current status cannot be rewritten safely, fail with a specific value-free `roadmap-invalid` planning error before projected repository validation rather than surfacing a generic `preflight-invalid` mismatch.
-4. Add direct resolver tests covering canonical, annotated (comma- and space-qualified), case-varied, and currently supported non-parenthesized roadmap markers; retain ambiguity protection when a line names multiple active change folders.
-5. Add lifecycle dry-run and apply regressions proving the observed annotated-proposed repository accepts successfully, produces a canonical `(accepted)` roadmap line and accepted DAG node, preserves surrounding roadmap prose, and leaves no journal after success. Add the corresponding accepted-to-in-progress coverage.
-6. Update `docs/spec/capabilities.md` to state that `accept` and `begin` atomically canonicalize the selected roadmap status together with change metadata, generated DAG state, and dependent fingerprints. Do not broaden the CLI grammar or public diagnostic taxonomy.
-7. Reconcile with `review-bound-acceptance-plan` if it lands first, run the focused and canonical gates, then archive this folder through the transactional lifecycle.
+1. [x] Define the roadmap status span used by transition projection from the same supported source-status forms that validation recognizes for each permitted transition; do not create a second list that can drift independently.
+2. [x] Update `_roadmap_transition_text` so `accept` canonicalizes supported proposed presentations — including the case-varied `(Proposed, not accepted)`, the comma-qualified `(proposed, depends on …)`, and the space-qualified `(proposed foundation)` forms observed in production — and `begin` canonicalizes supported accepted presentations, replacing the whole recognized presentation and preserving all prose outside it byte-for-byte.
+3. [x] Require proof that exactly one unambiguous selected-node status span changed. If the node line is found but its current status cannot be rewritten safely, fail with a specific value-free `roadmap-invalid` planning error before projected repository validation rather than surfacing a generic `preflight-invalid` mismatch.
+4. [x] Add direct resolver tests covering canonical, annotated (comma- and space-qualified), case-varied, and currently supported non-parenthesized roadmap markers; retain ambiguity protection when a line names multiple active change folders.
+5. [x] Add lifecycle dry-run and apply regressions proving the observed annotated-proposed repository accepts successfully, produces a canonical `(accepted)` roadmap line and accepted DAG node, preserves surrounding roadmap prose, and leaves no journal after success. Add the corresponding accepted-to-in-progress coverage.
+6. [x] Update `docs/spec/capabilities.md` to state that `accept` and `begin` atomically canonicalize the selected roadmap status together with change metadata, generated DAG state, and dependent fingerprints. Do not broaden the CLI grammar or public diagnostic taxonomy.
+7. [x] Reconcile with `review-bound-acceptance-plan` if it lands first, run the focused and canonical gates, then archive this folder through the transactional lifecycle.
 
 ## Verify
 

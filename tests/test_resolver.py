@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 from collections.abc import Iterable
 from dataclasses import FrozenInstanceError
@@ -579,3 +580,318 @@ def test_landing_projection_matches_final_on_disk_resolution(tmp_path: Path) -> 
     assert projected.findings == tuple(final.findings)
     assert projected.topo_order == tuple(final.topo_order)
     assert projection.roadmap_block == render_block(final)
+
+
+# ---------------------------------------------------------------- roadmap status span contract
+#
+# `_roadmap_transition_text` rewrites the roadmap presentation of the change a lifecycle
+# transition selected. These tests pin that span contract directly: the presentations it accepts
+# are derived from `_STATUS_TOKENS` (the grammar `_roadmap_status_for` already recognizes), the
+# whole presentation is replaced by the canonical destination token, and every byte outside the
+# span survives.
+
+_DAG_BLOCK = (
+    "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+    "```mermaid\nflowchart TD\n    example[\"example (proposed)\"]\n```\n"
+    "<!-- END GENERATED DAG -->\n"
+)
+_ROADMAP_HEADER = "---\npersistence: living\n---\n# Roadmap\n\n"
+_OWN_LINE_PREFIX = "- `docs/changes/example/`"
+
+
+def _status_node(node_id: str = "example", *, status: str = "proposed") -> Node:
+    return Node(
+        id=node_id,
+        kind="change",
+        path=Path(f"docs/changes/{node_id}/change.md"),
+        persistence="ephemeral",
+        status=status,
+        track="test",
+        depends_on=[],
+        files_owned=[],
+        gated_on=None,
+    )
+
+
+def _status_roadmap(line: str, *, dag: str = _DAG_BLOCK, trailer: str = "") -> str:
+    return f"{_ROADMAP_HEADER}{line}\n{trailer}{dag}"
+
+
+def _rewrite(
+    text: str,
+    *,
+    node: Node | None = None,
+    source_status: str = "proposed",
+    destination_status: str = "accepted",
+    change_dirs: set[str] | None = None,
+) -> str:
+    return resolver_module._roadmap_transition_text(
+        text,
+        node=node if node is not None else _status_node(),
+        source_status=source_status,
+        destination_status=destination_status,
+        change_dirs={"docs/changes/example/"} if change_dirs is None else change_dirs,
+    )
+
+
+def _own_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith(_OWN_LINE_PREFIX)]
+
+
+@pytest.mark.parametrize(
+    ("presentation", "rationale"),
+    [
+        ("(proposed)", "— promote the resolver boundary"),
+        ("(PROPOSED)", "— promote the resolver boundary"),
+        ("(Proposed, not accepted)", "— promote the resolver boundary"),
+        ("(proposed, depends on the landed `x`)", "— promote the resolver boundary"),
+        ("(proposed foundation)", "— promote the resolver boundary"),
+        ("(proposed, depends on x (v1.2))", "— promote the resolver boundary"),
+        ("(proposed — depends on x)", "— promote the resolver boundary"),
+        ("proposed 2026-08-03", "— promote the resolver boundary"),
+        ("(proposed)", "— rationale — with an inner em dash"),
+    ],
+)
+def test_accept_canonicalizes_every_supported_proposed_presentation(
+    presentation: str, rationale: str
+) -> None:
+    line = f"{_OWN_LINE_PREFIX} {presentation} {rationale}"
+    rewritten = _rewrite(_status_roadmap(line))
+    assert _own_lines(rewritten) == [f"{_OWN_LINE_PREFIX} (accepted) {rationale}"]
+
+
+def test_accept_canonicalizes_a_marker_that_follows_the_rationale_dash() -> None:
+    line = f"{_OWN_LINE_PREFIX} — promote the resolver boundary (proposed)"
+    rewritten = _rewrite(_status_roadmap(line))
+    assert _own_lines(rewritten) == [
+        f"{_OWN_LINE_PREFIX} — promote the resolver boundary (accepted)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "presentation",
+    [
+        "(accepted)",
+        "(ACCEPTED)",
+        "(Accepted, not started)",
+        "(accepted, depends on the landed `x`)",
+        "(accepted foundation)",
+        "(accepted, depends on x (v1.2))",
+    ],
+)
+def test_begin_canonicalizes_every_supported_accepted_presentation(
+    presentation: str,
+) -> None:
+    line = f"{_OWN_LINE_PREFIX} {presentation} — start the resolver boundary"
+    rewritten = _rewrite(
+        _status_roadmap(line),
+        node=_status_node(status="accepted"),
+        source_status="accepted",
+        destination_status="in-progress",
+    )
+    assert _own_lines(rewritten) == [
+        f"{_OWN_LINE_PREFIX} (in-progress) — start the resolver boundary"
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"{_OWN_LINE_PREFIX} — promote the resolver boundary",
+        f"{_OWN_LINE_PREFIX} (proposed — promote the resolver boundary",
+        f"{_OWN_LINE_PREFIX} (proposed) — was (proposed) before",
+        f"{_OWN_LINE_PREFIX} (proposed) proposed 2026-08-03",
+        f"{_OWN_LINE_PREFIX} (proposed 2026-08-03) — two overlapping presentations",
+        f"{_OWN_LINE_PREFIX} (proposed, ZYZZYVA-annotation — promote",
+    ],
+)
+def test_accept_rejects_a_located_line_it_cannot_rewrite_unambiguously(line: str) -> None:
+    with pytest.raises(ValueError) as captured:
+        _rewrite(_status_roadmap(line))
+    message = str(captured.value)
+    assert message == "roadmap-invalid: unrewritable roadmap status for example"
+    # Value-free: the detail is re-emitted verbatim as a reconciliation finding, so it carries
+    # neither the line, the presentation, nor any annotation prose planted in the fixture.
+    assert "ZYZZYVA" not in message
+    assert "proposed" not in message
+    assert _OWN_LINE_PREFIX not in message
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"{_OWN_LINE_PREFIX} — start the resolver boundary",
+        f"{_OWN_LINE_PREFIX} accepted 2026-08-03 — start the resolver boundary",
+        f"{_OWN_LINE_PREFIX} (accepted) — was (accepted) before",
+    ],
+)
+def test_begin_rejects_a_located_line_it_cannot_rewrite_unambiguously(line: str) -> None:
+    with pytest.raises(ValueError) as captured:
+        _rewrite(
+            _status_roadmap(line),
+            node=_status_node(status="accepted"),
+            source_status="accepted",
+            destination_status="in-progress",
+        )
+    assert str(captured.value) == "roadmap-invalid: unrewritable roadmap status for example"
+
+
+def test_rejection_detail_is_distinct_for_an_ambiguous_multi_folder_line() -> None:
+    shared = f"{_OWN_LINE_PREFIX} and `docs/changes/other/` (proposed) — promote"
+    with pytest.raises(ValueError) as captured:
+        _rewrite(
+            _status_roadmap(shared),
+            change_dirs={"docs/changes/example/", "docs/changes/other/"},
+        )
+    assert str(captured.value) == "roadmap-invalid: ambiguous roadmap line for example"
+
+    missing = "- `docs/changes/elsewhere/` (proposed) — promote"
+    with pytest.raises(ValueError) as captured:
+        _rewrite(_status_roadmap(missing))
+    assert str(captured.value) == "roadmap-invalid: no roadmap line for example"
+
+
+def test_a_line_naming_another_folder_never_donates_its_status_span() -> None:
+    cross_ref = "- `docs/changes/other/` and `docs/changes/example/` (accepted) — cross ref"
+    own = f"{_OWN_LINE_PREFIX} (proposed) — promote the resolver boundary"
+    text = f"{_ROADMAP_HEADER}{cross_ref}\n{own}\n{_DAG_BLOCK}"
+    rewritten = _rewrite(text, change_dirs={"docs/changes/example/", "docs/changes/other/"})
+    assert cross_ref in rewritten
+    assert _own_lines(rewritten) == [
+        f"{_OWN_LINE_PREFIX} (accepted) — promote the resolver boundary"
+    ]
+
+
+def test_rewrite_preserves_every_byte_outside_the_status_span() -> None:
+    other = "- `docs/changes/other/` (proposed) — unrelated line stays byte-identical"
+    line = f"{_OWN_LINE_PREFIX} (Proposed, not accepted)   — rationale with  spacing   "
+    text = _status_roadmap(line, trailer=f"{other}\n\n")
+    rewritten = _rewrite(text, change_dirs={"docs/changes/example/", "docs/changes/other/"})
+
+    before, after = text.splitlines(keepends=True), rewritten.splitlines(keepends=True)
+    assert len(before) == len(after)
+    changed = [index for index, pair in enumerate(zip(before, after)) if pair[0] != pair[1]]
+    assert changed == [5]
+    assert after[5] == f"{_OWN_LINE_PREFIX} (accepted)   — rationale with  spacing   \n"
+    # Exact prefix/suffix equality around the replaced span.
+    assert after[5].startswith(f"{_OWN_LINE_PREFIX} ")
+    assert after[5].endswith("   — rationale with  spacing   \n")
+    assert other in rewritten
+    assert rewritten[rewritten.index("<!-- BEGIN GENERATED DAG") :] == _DAG_BLOCK
+
+
+def test_rewrite_never_selects_a_line_inside_the_generated_dag_region() -> None:
+    dag = (
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n"
+        '    example["docs/changes/example/ (proposed)"]\n'
+        "```\n<!-- END GENERATED DAG -->\n"
+    )
+    line = f"{_OWN_LINE_PREFIX} (proposed) — promote the resolver boundary"
+    text = _status_roadmap(line, dag=dag)
+    rewritten = _rewrite(text)
+    assert rewritten[rewritten.index("<!-- BEGIN GENERATED DAG") :] == dag
+    assert _own_lines(rewritten) == [
+        f"{_OWN_LINE_PREFIX} (accepted) — promote the resolver boundary"
+    ]
+
+    dag_only = f"{_ROADMAP_HEADER}\n{dag}"
+    with pytest.raises(ValueError) as captured:
+        _rewrite(dag_only)
+    assert str(captured.value) == "roadmap-invalid: no roadmap line for example"
+
+
+def test_rewrite_preserves_line_terminators_blank_lines_and_a_final_unterminated_line() -> None:
+    dag = _DAG_BLOCK.replace("\n", "\r\n")
+    text = (
+        "---\r\npersistence: living\r\n---\r\n# Roadmap\r\n\r\n"
+        f"{_OWN_LINE_PREFIX} (proposed) — promote\r\n"
+        "\r\n"
+        f"{dag}"
+        "\r\n"
+        f"{_OWN_LINE_PREFIX} tail without a terminator"
+    )
+    rewritten = _rewrite(text)
+    assert rewritten.count("\r\n") == text.count("\r\n")
+    assert "\n" not in rewritten.replace("\r\n", "")
+    assert not rewritten.endswith(("\n", "\r"))
+    assert rewritten.endswith(f"{_OWN_LINE_PREFIX} tail without a terminator")
+    assert f"{_OWN_LINE_PREFIX} (accepted) — promote\r\n" in rewritten
+    assert rewritten.replace("(accepted)", "(proposed)", 1) == text
+
+
+def test_rewrite_computes_offsets_against_the_original_line_bytes() -> None:
+    # `str.lower()` is not length-preserving ("İ" lowercases to two code points), so an offset
+    # found in a lowercased copy would land on the wrong byte here.
+    line = f"{_OWN_LINE_PREFIX} İstanbulß (PROPOSED) — résumé"
+    rewritten = _rewrite(_status_roadmap(line))
+    assert _own_lines(rewritten) == [f"{_OWN_LINE_PREFIX} İstanbulß (accepted) — résumé"]
+
+
+def test_roadmap_status_recognition_is_unchanged_for_every_annotated_form() -> None:
+    node = _status_node()
+    change_dirs = {"docs/changes/example/"}
+    expected = {
+        "(proposed)": "proposed",
+        "(PROPOSED)": "proposed",
+        "(Proposed, not accepted)": "proposed",
+        "(proposed, depends on the landed `x`)": "proposed",
+        "(proposed foundation)": "proposed",
+        "proposed 2026-08-03": "proposed",
+        "(accepted)": "accepted",
+        "(Accepted, not started)": "accepted",
+        "(accepted foundation)": "accepted",
+        "(in-progress)": "in-progress",
+        "(blocked)": "blocked",
+        "— no status marker here": None,
+    }
+    for presentation, status in expected.items():
+        roadmap = f"{_ROADMAP_HEADER}{_OWN_LINE_PREFIX} {presentation} — rationale\n"
+        assert resolver_module._roadmap_status_for(node, roadmap, change_dirs) == status
+
+
+def test_the_status_span_grammar_is_derived_from_status_tokens_alone() -> None:
+    for status in ("proposed", "accepted", "in-progress", "blocked"):
+        assert resolver_module._status_source_tokens(status) == tuple(
+            token for token, mapped in resolver_module._STATUS_TOKENS if mapped == status
+        )
+    assert resolver_module._status_source_tokens("proposed")
+    assert resolver_module._status_source_tokens("accepted")
+
+    source = Path(resolver_module.__file__).read_text(encoding="utf-8")
+    module = ast.parse(source)
+    status_words = ("proposed", "accepted", "in-progress", "blocked")
+    alternations = [
+        constant.value
+        for constant in ast.walk(module)
+        if isinstance(constant, ast.Constant)
+        and isinstance(constant.value, str)
+        and "(?" in constant.value
+        and sum(word in constant.value for word in status_words) > 1
+    ]
+    assert alternations == []
+    assert r"\((?:proposed|accepted|in-progress|blocked)\)" not in source
+
+    rewriter = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_roadmap_transition_text"
+    )
+    assert not [
+        call
+        for call in ast.walk(rewriter)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "sub"
+    ]
+
+
+@pytest.mark.parametrize("token", resolver_module._status_source_tokens("proposed"))
+def test_every_recognized_proposed_token_is_rewritable_by_accept(token: str) -> None:
+    completion = ")" if token.startswith("(") else "26-08-03"
+    line = f"{_OWN_LINE_PREFIX} {token}{completion} — promote the resolver boundary"
+    spans = resolver_module._status_spans(f"{line}\n", (token,))
+    assert len(spans) == 1
+    assert _own_lines(_rewrite(_status_roadmap(line))) == [
+        f"{_OWN_LINE_PREFIX} (accepted) — promote the resolver boundary"
+    ]

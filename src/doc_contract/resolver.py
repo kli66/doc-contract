@@ -1147,39 +1147,128 @@ def _without_generated_roadmap(text: str) -> str:
     return text
 
 
+# The permitted explicit transitions as (source status, destination status). One table only:
+# `project_transition` reads the destination from it and the roadmap rewrite derives its
+# accepted source-status presentations from it through `_STATUS_TOKENS`, so recognition and
+# rewriting cannot drift into two status grammars.
+_TRANSITIONS: dict[str, tuple[str, str]] = {
+    "accept": ("proposed", "accepted"),
+    "begin": ("accepted", "in-progress"),
+}
+
+
+def _status_source_tokens(source_status: str) -> tuple[str, ...]:
+    """Every roadmap presentation `_roadmap_status_for` recognizes as `source_status`, in
+    recognition order. Derived from `_STATUS_TOKENS` — never a second literal list — so the
+    transition rewriter accepts exactly the grammar validation accepts."""
+    return tuple(token for token, status in _STATUS_TOKENS if status == source_status)
+
+
+def _status_span(line: str, token: str, match: re.Match[str]) -> tuple[int, int] | None:
+    """The span of the whole status presentation beginning at `match.start()`, or None when the
+    presentation is not closed and therefore not safely rewritable.
+
+    A parenthesized marker owns the group it opened: the span runs to the parenthesis that
+    balances it, so an in-presentation annotation (`(proposed, depends on x (v1.2))`) is
+    replaced wholesale. A bare marker owns the rest of the whitespace-delimited word holding
+    the match end, so `proposed 2026-08-03` is one presentation and a partial replacement can
+    never leave a `26-08-03` remnant behind. Offsets come from the match against the original
+    line, never from a lowercased copy (`str.lower()` is not length-preserving).
+    """
+    start = match.start()
+    if token.startswith("("):
+        depth = 0
+        for index in range(start, len(line)):
+            char = line[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return start, index + 1
+        return None
+    end = match.end()
+    while end < len(line) and not line[end].isspace():
+        end += 1
+    return start, end
+
+
+def _status_spans(line: str, tokens: tuple[str, ...]) -> list[tuple[int, int]]:
+    """The candidate source-status presentation spans on one roadmap line, collected
+    token-by-token in `_STATUS_TOKENS` order (one token's own matches in line order) and
+    deduplicated, so the list is not line-ordered when a line holds matches of two different
+    tokens; callers must not rely on its order.
+    Matching mirrors recognition: plain case-insensitive substring, no leading word boundary."""
+    spans: list[tuple[int, int]] = []
+    for token in tokens:
+        for match in re.finditer(re.escape(token), line, re.IGNORECASE):
+            span = _status_span(line, token, match)
+            if span is not None and span not in spans:
+                spans.append(span)
+    return spans
+
+
+def _generated_dag_range(lines: list[str]) -> range:
+    """The inclusive line range of the generated DAG region (begin marker through end marker),
+    so the prose rewrite can never select a machine-owned line. Empty when the region is not
+    well formed in this text."""
+    begin = next((i for i, line in enumerate(lines) if DAG_BEGIN_PREFIX in line), None)
+    end = next((i for i, line in enumerate(lines) if DAG_END in line), None)
+    if begin is None or end is None or end < begin:
+        return range(0)
+    return range(begin, end + 1)
+
+
 def _roadmap_transition_text(
     text: str,
     *,
     node: Node,
+    source_status: str,
     destination_status: str,
     change_dirs: set[str],
 ) -> str:
+    """Rewrite the selected roadmap line's source-status presentation to the canonical
+    destination token, preserving every byte outside that presentation (change reference,
+    em-dash rationale, trailing whitespace, line terminator) and every other line.
+
+    A located line is rewritten only when exactly one candidate presentation span exists and
+    the substitution changed bytes; a statusless, unclosed, or ambiguous line fails closed
+    here — before projected validation — with a value-free `roadmap-invalid` detail, because
+    the same string is re-emitted verbatim as a reconciliation finding.
+    """
     if DAG_BEGIN_PREFIX not in text or DAG_END not in text:
         raise ValueError("roadmap-invalid: generated DAG markers are missing")
     own_dir = f"docs/changes/{node.path.parent.name}/"
     specific = _specific_needle(node).lower()
+    tokens = _status_source_tokens(source_status)
     lines = text.splitlines(keepends=True)
-    matched = False
+    generated = _generated_dag_range(lines)
+    ambiguous = False
     for index, line in enumerate(lines):
+        if index in generated:
+            continue
         low = line.lower()
-        if specific not in low or any(
-            other.lower() in low for other in change_dirs - {own_dir}
-        ):
+        if specific not in low:
             continue
-        if DAG_BEGIN_PREFIX in line:
+        if any(other.lower() in low for other in change_dirs - {own_dir}):
+            ambiguous = True
             continue
-        lines[index] = re.sub(
-            r"\((?:proposed|accepted|in-progress|blocked)\)",
-            f"({destination_status})",
-            line,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-        matched = True
-        break
-    if not matched:
-        raise ValueError(f"roadmap-invalid: no roadmap line for {node.id}")
-    return "".join(lines)
+        spans = _status_spans(line, tokens)
+        rewritten: str | None = None
+        if len(spans) == 1:
+            start, end = spans[0]
+            candidate = line[:start] + f"({destination_status})" + line[end:]
+            if candidate != line:
+                rewritten = candidate
+        if rewritten is None:
+            # Zero or several candidate presentations, or a substitution that changed no bytes:
+            # never record a match without an actual rewrite.
+            raise ValueError(f"roadmap-invalid: unrewritable roadmap status for {node.id}")
+        lines[index] = rewritten
+        return "".join(lines)
+    if ambiguous:
+        raise ValueError(f"roadmap-invalid: ambiguous roadmap line for {node.id}")
+    raise ValueError(f"roadmap-invalid: no roadmap line for {node.id}")
 
 
 def _projected_resolution(result: Resolution) -> ProjectedResolution:
@@ -1297,9 +1386,10 @@ def project_transition(
     old_status = change.status
     if old_status is None:
         raise ValueError(f"change-status-invalid: {change_id} has no status")
-    destination = {"accept": "accepted", "begin": "in-progress"}.get(action)
-    if destination is None:
+    transition = _TRANSITIONS.get(action)
+    if transition is None:
         raise ValueError(f"transition-invalid: unsupported action {action!r}")
+    source_status, destination = transition
     new_text, accepted_at, started_at = _transition_change_text(
         change.path.read_text(encoding="utf-8"), action=action, transition_date=transition_date
     )
@@ -1334,6 +1424,7 @@ def project_transition(
     roadmap = _roadmap_transition_text(
         roadmap,
         node=change,
+        source_status=source_status,
         destination_status=destination,
         change_dirs=change_dirs,
     )

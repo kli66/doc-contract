@@ -32,12 +32,25 @@ refresh one frozen node's strict `self_hash` after review.
 Record explicit user or reviewer authorization by transitioning one proposed change to `accepted`.
 The command never infers authority, does not accept blocked work, and is idempotent when already
 accepted. `--dry-run` and `--include-untracked` use the immutable lifecycle plan boundary.
+One validated plan atomically canonicalizes the selected roadmap status presentation together with
+the change metadata, the generated DAG state, and the affected dependent fingerprints. The
+recognized source-status presentation is replaced wholesale by `(accepted)`, so an in-presentation
+annotation such as `depends on …` or `not accepted` is dropped while the change reference and the
+surrounding rationale are preserved byte-for-byte. A located roadmap line whose status has no
+single unambiguous rewritable presentation is rejected as `roadmap-invalid` during planning, before
+projected repository validation and before any mutation.
 
 ### `begin`
 
 Start work on one accepted change by transitioning it to `in-progress`, preserving an existing
 `accepted_at` date and recording `started_at`. It refuses proposed, blocked, and landed changes,
 is idempotent when already in progress, and never runs the target capability subprocess.
+The same atomic plan canonicalizes the selected roadmap status presentation together with the
+change metadata, the generated DAG state, and the affected dependent fingerprints, replacing the
+recognized accepted presentation wholesale with `(in-progress)`. In-presentation annotations are
+dropped while the change reference and the surrounding rationale are preserved byte-for-byte, and a
+located roadmap line without a single unambiguous rewritable presentation is rejected as
+`roadmap-invalid` during planning, before projected repository validation and before any mutation.
 
 ### `reconcile`
 
