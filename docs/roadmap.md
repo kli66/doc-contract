@@ -47,6 +47,7 @@ persistence: living
 ## Lifecycle
 
 - `docs/changes/archive/2026-10-08-canonicalize-roadmap-status-transitions/` (landed) — make `accept` and `begin` canonicalize every validator-supported source-status presentation for their permitted transition instead of failing after a zero-substitution rewrite; depends on accepted state and resolver-owned graph projection
+- `docs/changes/archive/2026-10-12-skill-routing-surface/` (landed) — make the portable skill route by user intent with stated status preconditions and stop rules, move the once-per-repository setup into a bundled guide, and bring the routing description back inside the spec limit; depends on accepted state, mechanical reconciliation, actionable lifecycle diagnostics, and the portable install contract
 - `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
 - `docs/changes/review-bound-acceptance-plan/` (proposed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
@@ -72,6 +73,7 @@ flowchart TD
     review_bound_acceptance_plan["review-bound-acceptance-plan (proposed)"]
     runtime_source_provenance["runtime-source-provenance (proposed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
+    skill_routing_surface["skill-routing-surface (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
     vendored_runtime_closure["vendored-runtime-closure (landed)"]
@@ -81,7 +83,9 @@ flowchart TD
     accepted_change_state --> proportional_accepted_work_contract
     accepted_change_state --> reflect_project_evidence
     accepted_change_state --> review_bound_acceptance_plan
+    accepted_change_state --> skill_routing_surface
     actionable_lifecycle_diagnostics --> review_bound_acceptance_plan
+    actionable_lifecycle_diagnostics --> skill_routing_surface
     discovery_lifecycle_hardening --> edge_fingerprint_policy
     discovery_lifecycle_hardening --> reuse_document_discovery_for_secret_scanning
     edge_fingerprint_policy --> landed_graph_transition_ownership
@@ -94,10 +98,12 @@ flowchart TD
     mechanical_reconciliation --> actionable_lifecycle_diagnostics
     mechanical_reconciliation --> proportional_accepted_work_contract
     mechanical_reconciliation --> review_bound_acceptance_plan
+    mechanical_reconciliation --> skill_routing_surface
     portable_install_contract_convergence --> always_valid_repository_settings
     portable_install_contract_convergence --> optional_project_memory
     portable_install_contract_convergence --> reflect_project_evidence
     portable_install_contract_convergence --> runtime_source_provenance
+    portable_install_contract_convergence --> skill_routing_surface
     portable_install_contract_convergence --> vendored_runtime_closure
     secret_handling_guardrails --> global_cwd_independent_cli
     secret_handling_guardrails --> reuse_document_discovery_for_secret_scanning

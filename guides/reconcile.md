@@ -1,8 +1,11 @@
 # `doc-contract reconcile semantic` — the entry / exit drift-check
 
-Invoke as `/doc-contract reconcile semantic docs/changes/<name>/ [entry|exit]`. The existing slash
-form without `semantic` is a compatibility alias for the same judgment-heavy workflow. The
-packaged command has a separate explicit spelling:
+**Interface note:** `reconcile semantic` is a `doc-contract` **skill** verb with no shell form; see
+the dispatcher (`SKILL.md`) for the per-client invocation spelling.
+
+Invoke as the `reconcile semantic` skill verb with the change folder and phase. Omitting `semantic`
+remains a compatibility alias for the same judgment-heavy workflow. The packaged command has a
+separate explicit spelling:
 
 ```console
 doc-contract reconcile mechanical docs/changes/<name> --phase entry --format json --repo-root <repo>

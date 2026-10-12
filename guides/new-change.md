@@ -1,13 +1,11 @@
 # `doc-contract new-change` — author a change (inverse of dispatch)
 
-**Interface note:** this is the `/doc-contract` **agent-skill** workflow, not a subcommand of the
-installed or vendored `doc-contract` executable. Use `/doc-contract new-change <intent>` inside an
-agent session. `doc-contract --help` will not list `new-change`; the executable is reserved for
-deterministic repository operations such as `check`, `accept`, `begin`, `reconcile mechanical`,
-and `land`.
+**Interface note:** `new-change` is a `doc-contract` **skill** verb with no shell form; see the
+dispatcher (`SKILL.md`) for the per-client invocation spelling.
 
-Invoked as `/doc-contract new-change <intent>`. The contract (`AGENTS.md`) collapses *executing* a
-change to one line — "Execute `docs/changes/<name>/`" — because the standing protocol is auto-loaded.
+Invoked as the `new-change` skill verb with a raw intent. The contract (`AGENTS.md`) collapses
+*executing* a change to one line — "Execute `docs/changes/<name>/`" — because the standing protocol
+is auto-loaded.
 This sub-command is the missing other half: turning a raw intent into a well-formed change folder that
 is *ready* to dispatch.
 

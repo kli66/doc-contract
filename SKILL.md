@@ -1,163 +1,55 @@
 ---
 name: doc-contract
-description: The portable doc-contract system for a repo's docs — an enforcement resolver + coverage tripwires plus the change lifecycle. The `/doc-contract` agent skill provides judgment-heavy authoring and reconciliation workflows; the installed `doc-contract` executable provides deterministic repository operations. Skill sub-commands - `check` (run the change-DAG resolver + tripwires), `new-change <intent>` (author a docs/changes/<name>/ folder; triggers "propose a change", "new change", "start work on X"), `reconcile <folder> [entry|exit]` (the MANDATORY drift-check on picking up or landing a change; triggers "reconcile", "pick up the change", "land the change", "archive the change"), `accept <folder>` (record explicit acceptance), `begin <folder>` (start work on an accepted change), `land <folder>` (transactionally archive a completed change), `install` (materialize the skill into another repo). Use for any of these, or when asked about the doc taxonomy / change-DAG / capability tripwire. The invariant package is configured per repository by `.doc-contract.toml`.
+description: Route a documentation lifecycle: author a change, reconcile entry/exit, accept, begin, land, and check the doc graph. Use when a repo carries `.doc-contract.toml`, `docs/roadmap.md`, or `docs/changes/`, or the user says propose a change, start work on X, pick up / reconcile, land or archive a change, are the docs consistent, update the roadmap DAG, or set up doc-contract in this repo — and for the doc taxonomy, persistence classes, change DAG, or capability tripwire.
 ---
 
-# doc-contract — the doc-contract system as one skill
+# doc-contract
 
-This skill *encapsulates the implementation* of the doc-contract scheme. The **contract** a person
-reads lives in the repo's `AGENTS.md` (the taxonomy, persistence model, change/handoff protocol); this
-skill is (a) the **machinery** that enforces it — a stdlib change-DAG resolver + coverage tripwires,
-kept out of the human-facing `docs/` tree because a resolver is an implementation detail — and (b) the
-**lifecycle verbs** that operationalize the protocol the contract states tersely.
+## Carrier rules
 
-It is **tool-agnostic** — the installed or vendored `doc-contract` command has zero third-party
-runtime dependencies. Colleagues who do not use this skill still get the discipline through the
-CLI and the `AGENTS.md` contract. The skill supplies authoring workflows; it is not the runtime.
+1. The CLI is the only thing you execute: `check`, `update`, `stamp`, `sync`, `reconcile mechanical`,
+   `accept`, `begin`, `land`.
+2. The skill verbs `new-change`, `reconcile semantic`, and `install` have no shell form: never attempt
+   `doc-contract <skill-verb>`.
+3. Never hand-roll what a verb owns: no manual `git mv`, hash stamp, roadmap update, or status edit.
 
-## Skill and CLI boundary
+## Invocation
 
-There are two deliberately distinct interfaces with similar names:
+Name the verb, then use the client's spelling: Pi — `/skill:doc-contract <verb> …`; a client that
+exposes skills as slash commands — `/<skill> <verb> …`; the runtime — `doc-contract <cli-verb> …`.
 
-- `/doc-contract <sub-command>` is the **agent skill**. It includes judgment-heavy workflows such as
-  `/doc-contract new-change <intent>` and `/doc-contract reconcile semantic <folder> [entry|exit]`.
-  These workflows read and reason over ADRs, the roadmap, source ownership, dependents, and project
-  conventions. They are instructions for an agent and are not executable Python CLI commands.
-- `doc-contract <sub-command>` is the **installed or vendored CLI**. It provides deterministic,
-  offline-capable repository operations such as `check`, `update`, `stamp`, `sync`, mechanical
-  `reconcile`, `accept`, `begin`, and `land`.
+## Intent routing
 
-In particular, `new-change` is skill-only for now. Do not expect `doc-contract new-change` to appear
-in `doc-contract --help` or to work as a shell command. Use `/doc-contract new-change <intent>` when
-an agent session is available; it authors a proposed folder and stops before acceptance or execution.
+| user intent | do this | carrier | required status |
+| --- | --- | --- | --- |
+| are the docs consistent? | `doc-contract check --repo-root <repo> --offline` | CLI | any |
+| roadmap DAG stale | `doc-contract update --repo-root <repo>` | CLI | any |
+| propose / start work on X | read `guides/new-change.md`; stop at `Proposed` | you | none |
+| review approved | `doc-contract accept <change> --repo-root <repo>` | CLI | proposed |
+| pick up / entry | mechanical entry report, the entry judgments in `guides/reconcile.md`, then `doc-contract begin <change>` | CLI + you | accepted |
+| land / archive | mechanical exit report, the exit judgments in `guides/reconcile.md`, `land --dry-run`, then `land` | CLI + you | in-progress |
+| frozen document edited | `doc-contract stamp <path> --repo-root <repo>` after review | CLI | any |
+| set up in this repository | read `guides/install.md` | you | none |
 
-## Skill sub-commands (dispatch on the first arg)
+Lifecycle: `proposed → accept → accepted → begin → in-progress → land → landed`. Entry reconciliation
+is bracketed before `begin`; exit reconciliation before `land`. The mechanical half is evidence; the
+semantic half is judgment.
 
-The entries prefixed with `/doc-contract` below are agent-skill workflows. The entries prefixed with
-`doc-contract` are executable CLI commands; the distinction is intentional. In particular,
-`/doc-contract new-change` is not the same interface as a shell command named `doc-contract new-change`.
+## Refusals
 
-| invocation | what it does |
-| ----------- | -------------- |
-| `/doc-contract check` | Run the resolver + tripwires; report ERROR/WARN findings. See **Run it** below. |
-| `/doc-contract new-change <intent>` | Author a well-formed `docs/changes/<name>/` folder from a raw intent, grounded in the ADRs + roadmap + code, stopping at `Proposed`. **Read and follow `guides/new-change.md`.** |
-| `/doc-contract reconcile semantic <folder> [entry\|exit]` | The MANDATORY judgment-heavy entry/exit drift-check. The slash form without `semantic` remains a compatibility alias. **Read and follow `guides/reconcile.md`.** |
-| `doc-contract reconcile mechanical CHANGE --phase {entry,exit}` | Read-only deterministic readiness evidence consumed by the semantic workflow |
-| `/doc-contract land <folder> [--dry-run] [--diff]` | Apply the transactional landing boundary after reconciliation: status, roadmap, fingerprints, journaling, and archive movement. Preview scope first; add `--diff` for the complete patch. |
-| `/doc-contract accept CHANGE [--dry-run] [--include-untracked]` | Record explicit user/reviewer acceptance |
-| `/doc-contract begin CHANGE [--dry-run] [--include-untracked]` | Start work on an accepted change |
-| `/doc-contract install` | Materialize the skill into another repo. See **Install into a new repo** below. |
+- A live contradiction with an ADR or an importer stops the work and is surfaced; never edit the ADR
+  or the change to match the other.
+- An unaccepted folder never begins work; a blocked one stays under manual handling.
+- A trivial edit earns a roadmap line and no folder.
+- A not-ready mechanical report stops the transition instead of being improvised around.
 
-If no sub-command is given, infer intent from the request (a raw intent to build → `new-change`;
-picking up or landing a change → semantic `reconcile`; "are the docs consistent?" → `check`). The two lifecycle
-guides are the authoring/reconcile front-end to the *same* machinery `check` runs — one system, one
-skill, distinct verbs.
+## Always true
 
-## Layout
+- Repository selection is always explicit (`--repo-root`) and never inferred.
+- The runtime stays stdlib-only: never add a dependency; use `string.Template` and f-strings.
+- Scanner output stays value-free: paths, lines, and names only, never values.
 
-```text
-doc-contracts distribution/
-  SKILL.md                      this workflow dispatcher
-  AGENTS.template.md            portable operating contract
-  guides/                       new-change and reconciliation procedures
-  src/doc_contract/             packaged CLI, config, resolver, scanner, landing, and sync code
-  scripts/                      compatibility-only flat adapters and pytest tripwires
+## Read next
 
-target repository/
-  .doc-contract.toml            sole resolver configuration input
-  AGENTS.md                     adapted portable operating contract
-  docs/roadmap.md               living roadmap and generated DAG
-  .doc-contract/                optional vendored CLI and package produced by `sync`
-  .doc-contract-manifest.json   optional package version and content-hash pin
-```
-
-**Invariant vs. parameter is the whole design.** The package is invariant. Everything
-project-specific is declared in `.doc-contract.toml`; the resolver loads data and never imports the
-target repository. `scripts/config.py` remains only for legacy vendored tests and adapters.
-
-`.doc-contract.toml` contract (all read by the invariant core):
-
-| name | what it is |
-| ------ | ------------ |
-| `schema_version` | configuration grammar version; currently `1` |
-| `repo_name` | cosmetic repository label |
-| `roadmap` | repo-relative roadmap path; always required |
-| `root_nodes` | managed docs outside changes/adr/spec that must self-classify |
-| `optional_roots` | explicit exceptions to required-by-default root nodes |
-| `edge_fingerprints` | `advisory` by default; `required` opts into strict active-edge hashes |
-| `capability` | skipped, optional, or required subprocess boundary |
-| `secret_env_names` | additional credential environment names, never values |
-
-## Run it — `check` (in this repo)
-
-```console
-# full gate
-uv run pytest -q
-
-# resolve + report findings from any cwd (0 exit iff no ERROR)
-doc-contract check --repo-root /path/to/repo --offline
-doc-contract check --repo-root /path/to/repo --offline --include-untracked
-
-# regenerate the roadmap's Mermaid DAG block in place
-doc-contract update --repo-root /path/to/repo
-doc-contract update --repo-root /path/to/repo --include-untracked
-doc-contract accept docs/changes/<name> --repo-root /path/to/repo --dry-run
-doc-contract begin docs/changes/<name> --repo-root /path/to/repo --dry-run
-doc-contract reconcile mechanical docs/changes/<name> --phase entry --format json --repo-root /path/to/repo
-doc-contract reconcile mechanical docs/changes/<name> --phase exit --format json --repo-root /path/to/repo
-doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run
-doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run --diff
-doc-contract land docs/changes/<name> --repo-root /path/to/repo --dry-run --include-untracked
-doc-contract land docs/changes/<name> --repo-root /path/to/repo
-```
-
-## Install into a new repo — `install`
-
-`/doc-contract install` is this skill's guided materialization workflow. `doc-contract sync` is a
-CLI command within that workflow: it writes the optional vendored runtime, not the operating
-contract or agent-client integration.
-
-To turn a bare repository into one under doc-contract, prefer a system-level `doc-contract` CLI
-over a repository-vendored runtime. Do not create or use a vendored install unless the user
-specifically requests one.
-
-1. **Reuse the CLI before installing.** Before installing anything, run `command -v doc-contract`
-   and `doc-contract --version`. If both succeed, reuse that system-level command and do not install
-   another copy. Only when the CLI is unavailable or unusable should you run
-   `pip install /path/to/doc-contracts` for setup and normal automation.
-2. **Write `.doc-contract.toml`.** Declare `schema_version`, `repo_name`, `roadmap`, and
-   `root_nodes`. Every root is required unless its ID appears in `optional_roots`; the roadmap is
-   always required. Dependency topology is mandatory, while review fingerprints default to
-   `edge_fingerprints = "advisory"`; set `required` only when missing or invalid active-edge hashes
-   should fail the gate. Frozen-document `self_hash` remains strict in either mode. Configure
-   capability mode as `skip`, `optional`, or `required`; non-skipped checks must be subprocess
-   commands.
-3. **Adapt the contract.** Copy `AGENTS.template.md` to `AGENTS.md`, fill its project placeholders,
-   and keep any client-specific pointer files optional and thin.
-4. **Seed the roadmap.** Create `docs/roadmap.md` with a `persistence: living` header and the two
-   generated-DAG markers. Run `doc-contract update --repo-root /path/to/repo` after the configuration and
-   initial documents are valid.
-5. **Vendor only on explicit request.** If the user specifically requests a vendored or air-gapped
-   install, run `doc-contract sync --repo-root /path/to/repo` while the package is available.
-   Thereafter the repository can run `python /path/to/repo/.doc-contract/doc_contract_cli.py ...`
-   without the package installation. Otherwise, do not run `sync` or create vendored runtime files.
-6. **Green the gate.** From any directory, run
-   `doc-contract check --repo-root /path/to/repo --offline`, or the vendored equivalent only when
-   the user requested vendoring, plus the repository's own test suite. The first run surfaces every
-   unclassified doc (`missing-persistence`) — add the `persistence:` headers it names.
-
-Repositories already using the flat modules in `scripts/` may retain them and their pytest
-tripwires as an explicitly compatibility-only suite. Do not use `scripts/config.py`, flat imports,
-or a client-specific skill directory as the configuration or execution boundary for new installs.
-
-## Zero-dep invariant
-
-The runtime is **stdlib only** — no PyYAML (a total YAML *subset* parser is built into the resolver), no
-Jinja2 (Mermaid render uses f-strings). Keep it that way: any doc-gen uses `string.Template`; never
-add a dependency to the resolver. This is what lets the skill drop into an air-gapped repo unchanged.
-
-## Secret-handling guardrails
-
-The resolver passes the exact ordered result of managed-document discovery to `doc_contract.secret_scan`: existing declared roots, selected ADR/spec/change/archive documents, and companion Markdown inside selected change folders. It reports an `ERROR` with code `secret-detected` for credential-like assignments and known secret environment names in that set. Default tracked/declared and `--include-untracked` decisions therefore apply identically to graph validation and scanning. Source, `.env`, fixtures, generated output, dependency trees, and checked-out submodules are outside the scan unless a path is itself a selected managed document; repository-wide secret detection belongs to a dedicated security tool.
-
-Scanner findings are deliberately value-free. Diagnostics include only the relative path, line, normalized variable name, finding kind, and `present`/`length` metadata. Do not copy matched values into resolver output, reports, fixtures, handoffs, or change folders. A repository may extend the known environment-name set by passing `secret_env_names` to `scan_file`, `scan_tree`, or `scan`; store names, never their values.
+`guides/new-change.md` · `guides/reconcile.md` · `guides/install.md` ·
+`AGENTS.template.md` (the canonical contract) · `README.md` (configuration and runtime reference).
