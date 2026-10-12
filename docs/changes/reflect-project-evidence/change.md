@@ -54,7 +54,10 @@ concurrently, and whoever lands second must rebase and preserve both contracts.
 `canonicalize-roadmap-status-transitions` overlaps `resolver.py`, `tests/test_resolver.py`, the
 capability document, and the roadmap but touches different resolver behavior; this is a sequential
 soft overlap. `optional-project-memory` and `proportional-accepted-work-contract` overlap only the
-roadmap. No target repository's `AGENTS.md`, specification, local skill, or configuration file is an
+roadmap. `runtime-source-provenance` also overlaps `cli.py`, `docs/spec/capabilities.md`, `README.md`,
+`SKILL.md`, and the roadmap, but only in additive regions (one new command, one manifest key set,
+one capability heading) with no ordering dependency; whichever item lands second rebases and
+preserves both contracts. No target repository's `AGENTS.md`, specification, local skill, or configuration file is an
 implementation-owned mutation: reflection proposes those edits inside its governed output.
 
 ## Why

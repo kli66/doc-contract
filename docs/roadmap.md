@@ -42,6 +42,7 @@ persistence: living
 - `docs/changes/archive/2026-07-24-vendored-runtime-closure/` (landed) — make sync materialize one deterministic,
   complete runtime image whose isolated launcher and manifest share the installed package identity;
   depends on the landed portable install contract convergence
+- `docs/changes/runtime-source-provenance/` (proposed) — let the running runtime name its own source, commit, and upstream location so an agent can reach the code it is executing instead of guessing or trusting a stale client copy; depends on the landed vendored runtime closure, portable install boundary, and global cwd-independent CLI
 
 ## Lifecycle
 
@@ -69,6 +70,7 @@ flowchart TD
     reflect_project_evidence["reflect-project-evidence (proposed)"]
     reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]
     review_bound_acceptance_plan["review-bound-acceptance-plan (proposed)"]
+    runtime_source_provenance["runtime-source-provenance (proposed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
@@ -85,6 +87,7 @@ flowchart TD
     edge_fingerprint_policy --> landed_graph_transition_ownership
     edge_fingerprint_policy --> portable_install_contract_convergence
     edge_fingerprint_policy --> unified_offline_live_verification
+    global_cwd_independent_cli --> runtime_source_provenance
     global_cwd_independent_cli --> transactional_land_command
     landed_graph_transition_ownership --> accepted_change_state
     landed_graph_transition_ownership --> canonicalize_roadmap_status_transitions
@@ -94,6 +97,7 @@ flowchart TD
     portable_install_contract_convergence --> always_valid_repository_settings
     portable_install_contract_convergence --> optional_project_memory
     portable_install_contract_convergence --> reflect_project_evidence
+    portable_install_contract_convergence --> runtime_source_provenance
     portable_install_contract_convergence --> vendored_runtime_closure
     secret_handling_guardrails --> global_cwd_independent_cli
     secret_handling_guardrails --> reuse_document_discovery_for_secret_scanning
@@ -101,5 +105,6 @@ flowchart TD
     transactional_land_command --> concise_landing_output
     transactional_land_command --> discovery_lifecycle_hardening
     unified_offline_live_verification --> reflect_project_evidence
+    vendored_runtime_closure --> runtime_source_provenance
 ```
 <!-- END GENERATED DAG -->
