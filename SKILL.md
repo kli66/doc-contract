@@ -1,6 +1,6 @@
 ---
 name: doc-contract
-description: Route a documentation lifecycle: author a change, reconcile entry/exit, accept, begin, land, and check the doc graph. Use when a repo carries `.doc-contract.toml`, `docs/roadmap.md`, or `docs/changes/`, or the user says propose a change, start work on X, pick up / reconcile, land or archive a change, are the docs consistent, update the roadmap DAG, or set up doc-contract in this repo — and for the doc taxonomy, persistence classes, change DAG, or capability tripwire.
+description: "Route a documentation lifecycle: author a change, reconcile entry/exit, accept, begin, land, and check the doc graph. Use when a repo carries `.doc-contract.toml`, `docs/roadmap.md`, or `docs/changes/`, or the user says propose a change, start work on X, pick up / reconcile, land or archive a change, are the docs consistent, update the roadmap DAG, or set up doc-contract in this repo — and for the doc taxonomy, persistence classes, change DAG, or capability tripwire."
 ---
 
 # doc-contract
