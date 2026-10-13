@@ -1455,6 +1455,169 @@ def project_transition(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ProposalProjection:
+    """A projected proposal state without any repository mutation."""
+
+    change_document: ProjectedDocument
+    resolution: ProjectedResolution
+    roadmap_block: str
+
+    @property
+    def findings(self) -> tuple[Finding, ...]:
+        return self.resolution.findings
+
+
+def project_proposal(
+    root: Path,
+    settings: Settings,
+    *,
+    proposal_id: str,
+    proposal_path: str,
+    proposal_content: str,
+    roadmap_line: str,
+    roadmap_text: str | None = None,
+) -> ProposalProjection:
+    """Project a proposed change without mutating the repository.
+
+    This is the public pure resolver projection required by REQ-024 and REQ-054.
+    It accepts the already-rendered proposed change.md, its repository-relative path,
+    and a roadmap remediation line; parses the front matter; validates the proposal
+    constraints; resolves declared dependencies and files_owned; computes the projected
+    graph and Mermaid block; and returns immutable projected findings without writing.
+
+    Args:
+        root: Repository root path.
+        settings: Repository settings.
+        proposal_id: The change ID for the proposal.
+        proposal_path: Repository-relative path for the proposal document.
+        proposal_content: The rendered proposal document content.
+        roadmap_line: The rendered roadmap remediation line.
+        roadmap_text: Optional roadmap text; if None, reads from the repository.
+
+    Returns:
+        An immutable ProposalProjection with the projected state.
+
+    Raises:
+        ValueError: If the proposal fails validation constraints.
+    """
+    # Parse the proposal front matter
+    fm = parse_front_matter(proposal_content)
+    if fm is None:
+        raise ValueError("proposal-invalid: missing front matter")
+
+    # Validate required fields
+    proposal_id_fm = _as_str(fm.get("id"))
+    if proposal_id_fm != proposal_id:
+        raise ValueError(
+            f"proposal-invalid: front-matter id {proposal_id_fm!r} does not match "
+            f"requested id {proposal_id!r}"
+        )
+
+    persistence = _as_str(fm.get("persistence"))
+    if persistence != "ephemeral":
+        raise ValueError(
+            f"proposal-invalid: persistence must be 'ephemeral', got {persistence!r}"
+        )
+
+    status = _as_str(fm.get("status"))
+    if status != "proposed":
+        raise ValueError(
+            f"proposal-invalid: status must be 'proposed', got {status!r}"
+        )
+
+    # Verify path identity
+    expected_path = f"docs/changes/{proposal_id}/change.md"
+    if proposal_path != expected_path:
+        raise ValueError(
+            f"proposal-invalid: path {proposal_path!r} does not match expected {expected_path!r}"
+        )
+
+    # Build a synthetic node from the proposal
+    path = root / proposal_path
+    synthetic_node = _node_from_change_like(root, proposal_id, "change", path, fm)
+
+    # Discover existing nodes
+    discovery = discover(root, settings, include_untracked=True)
+    nodes = dict(discovery.nodes)
+
+    # Check for existing node with same ID
+    if proposal_id in nodes:
+        raise ValueError(f"proposal-invalid: change id {proposal_id!r} already exists")
+
+    # Add the synthetic proposal node
+    nodes[proposal_id] = synthetic_node
+
+    # Compute dependents
+    _compute_dependents(nodes)
+
+    # Topo sort
+    order, cycle = _topo_sort(nodes)
+
+    # Get roadmap text
+    if roadmap_text is None:
+        roadmap_text = _roadmap_text(root, settings)
+
+    # Add the roadmap line to the roadmap text for validation
+    # Find the Remediation section and add the line
+    roadmap_with_line = _insert_remediation_line(roadmap_text, roadmap_line)
+
+    # Validate
+    findings = list(discovery.findings) + validate(
+        root, nodes, cycle, settings, roadmap_override=_without_generated_roadmap(roadmap_with_line)
+    )
+
+    # Build resolution
+    resolution = Resolution(
+        nodes=nodes,
+        findings=findings,
+        topo_order=order,
+        discovery=discovery.records,
+        document_paths=discovery.document_paths,
+    )
+
+    # Render the DAG block
+    roadmap_block = render_block(resolution)
+
+    return ProposalProjection(
+        change_document=ProjectedDocument(path, proposal_content),
+        resolution=_projected_resolution(resolution),
+        roadmap_block=roadmap_block,
+    )
+
+
+def _insert_remediation_line(roadmap_text: str, line: str) -> str:
+    """Insert a remediation line under the ## Remediation section.
+
+    If the section exists, insert after it. If not, append at the end.
+    """
+    lines = roadmap_text.splitlines(keepends=True)
+    remediation_index = None
+    for i, current_line in enumerate(lines):
+        if current_line.strip() == "## Remediation":
+            remediation_index = i
+            break
+
+    if remediation_index is None:
+        # No Remediation section, append at end
+        if roadmap_text and not roadmap_text.endswith("\n"):
+            roadmap_text += "\n"
+        return roadmap_text + line + "\n"
+
+    # Find the next section or end
+    insert_index = remediation_index + 1
+    for i in range(insert_index, len(lines)):
+        if lines[i].strip().startswith("##"):
+            insert_index = i
+            break
+    else:
+        insert_index = len(lines)
+
+    # Insert the line
+    lines.insert(insert_index, line + "\n")
+    return "".join(lines)
+
+
 def update_roadmap(
     root: Path,
     settings: Settings,

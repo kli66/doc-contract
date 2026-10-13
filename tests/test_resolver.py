@@ -19,6 +19,7 @@ from doc_contract.resolver import (
     Resolution,
     fingerprint,
     project_landing,
+    project_proposal,
     render_block,
     resolve,
 )
@@ -895,3 +896,208 @@ def test_every_recognized_proposed_token_is_rewritable_by_accept(token: str) -> 
     assert _own_lines(_rewrite(_status_roadmap(line))) == [
         f"{_OWN_LINE_PREFIX} (accepted) — promote the resolver boundary"
     ]
+
+
+# --------------------------------------------------------------------------- Proposal projection tests (F-007)
+
+
+def test_project_proposal_validates_constraints(tmp_path: Path) -> None:
+    """REQ-024: project_proposal validates persistence and status constraints."""
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    settings = _settings(root)
+
+    # Valid proposal content
+    valid_content = """---
+id: test-proposal
+persistence: ephemeral
+status: proposed
+track: test
+---
+# Test Proposal
+
+Status: Proposed (not accepted) · Proposed 2026-01-01
+"""
+
+    # Test valid projection
+    projection = project_proposal(
+        root,
+        settings,
+        proposal_id="test-proposal",
+        proposal_path="docs/changes/test-proposal/change.md",
+        proposal_content=valid_content,
+        roadmap_line="- `docs/changes/test-proposal/` (proposed) — test",
+    )
+    assert projection.change_document.path == root / "docs/changes/test-proposal/change.md"
+    assert projection.resolution.nodes["test-proposal"].status == "proposed"
+    assert projection.resolution.nodes["test-proposal"].persistence == "ephemeral"
+
+
+def test_project_proposal_rejects_wrong_persistence(tmp_path: Path) -> None:
+    """REQ-024: project_proposal rejects non-ephemeral persistence."""
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    settings = _settings(root)
+
+    content = """---
+id: test-proposal
+persistence: living
+status: proposed
+---
+# Test
+"""
+
+    with pytest.raises(ValueError) as exc:
+        project_proposal(
+            root,
+            settings,
+            proposal_id="test-proposal",
+            proposal_path="docs/changes/test-proposal/change.md",
+            proposal_content=content,
+            roadmap_line="- `docs/changes/test-proposal/` (proposed) — test",
+        )
+    assert "persistence must be 'ephemeral'" in str(exc.value)
+
+
+def test_project_proposal_rejects_wrong_status(tmp_path: Path) -> None:
+    """REQ-024: project_proposal rejects non-proposed status."""
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    settings = _settings(root)
+
+    content = """---
+id: test-proposal
+persistence: ephemeral
+status: accepted
+---
+# Test
+"""
+
+    with pytest.raises(ValueError) as exc:
+        project_proposal(
+            root,
+            settings,
+            proposal_id="test-proposal",
+            proposal_path="docs/changes/test-proposal/change.md",
+            proposal_content=content,
+            roadmap_line="- `docs/changes/test-proposal/` (proposed) — test",
+        )
+    assert "status must be 'proposed'" in str(exc.value)
+
+
+def test_project_proposal_rejects_id_mismatch(tmp_path: Path) -> None:
+    """REQ-024: project_proposal rejects ID mismatch."""
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    settings = _settings(root)
+
+    content = """---
+id: different-id
+persistence: ephemeral
+status: proposed
+---
+# Test
+"""
+
+    with pytest.raises(ValueError) as exc:
+        project_proposal(
+            root,
+            settings,
+            proposal_id="test-proposal",
+            proposal_path="docs/changes/test-proposal/change.md",
+            proposal_content=content,
+            roadmap_line="- `docs/changes/test-proposal/` (proposed) — test",
+        )
+    assert "does not match" in str(exc.value)
+
+
+def test_project_proposal_rejects_path_mismatch(tmp_path: Path) -> None:
+    """REQ-024: project_proposal rejects path mismatch."""
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap())
+    settings = _settings(root)
+
+    content = """---
+id: test-proposal
+persistence: ephemeral
+status: proposed
+---
+# Test
+"""
+
+    with pytest.raises(ValueError) as exc:
+        project_proposal(
+            root,
+            settings,
+            proposal_id="test-proposal",
+            proposal_path="docs/changes/wrong-path/change.md",
+            proposal_content=content,
+            roadmap_line="- `docs/changes/test-proposal/` (proposed) — test",
+        )
+    assert "does not match expected" in str(exc.value)
+
+
+def test_project_proposal_parity_with_final_resolution(tmp_path: Path) -> None:
+    """REQ-054: projection's findings and Mermaid block equal final on-disk resolution."""
+    import subprocess
+
+    root = tmp_path / "repo"
+    roadmap_header = "---\npersistence: living\n---\n# Roadmap\n\n## Remediation\n\n"
+    generated = (
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n"
+        "<!-- END GENERATED DAG -->\n"
+    )
+    _write(root, "docs/roadmap.md", roadmap_header + generated)
+
+    # Initialize git repo
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=root, check=True, capture_output=True)
+
+    settings = _settings(root)
+
+    proposal_content = """---
+id: test-proposal
+persistence: ephemeral
+status: proposed
+track: test
+---
+# Test Proposal
+
+Status: Proposed (not accepted) · Proposed 2026-01-01
+"""
+
+    roadmap_line = "- `docs/changes/test-proposal/` (proposed) — test proposal"
+
+    # Project the proposal
+    projection = project_proposal(
+        root,
+        settings,
+        proposal_id="test-proposal",
+        proposal_path="docs/changes/test-proposal/change.md",
+        proposal_content=proposal_content,
+        roadmap_line=roadmap_line,
+    )
+
+    # Write the proposal to disk
+    proposal_path = root / "docs/changes/test-proposal/change.md"
+    proposal_path.parent.mkdir(parents=True, exist_ok=True)
+    proposal_path.write_text(proposal_content, encoding="utf-8")
+
+    # Update the roadmap with the line and DAG
+    roadmap_new = roadmap_header + roadmap_line + "\n" + projection.roadmap_block + "\n"
+    _write(root, "docs/roadmap.md", roadmap_new)
+
+    # Resolve with include_untracked=True
+    final = resolve(root, settings, include_untracked=True)
+
+    # Compare findings (excluding untracked-node warnings which differ)
+    projected_findings = [f for f in projection.resolution.findings if f.code != "untracked-node-included"]
+    final_findings = [f for f in final.findings if f.code != "untracked-node-included"]
+    assert projected_findings == final_findings
+
+    # Compare Mermaid blocks
+    assert projection.roadmap_block == render_block(final)

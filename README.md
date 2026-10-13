@@ -122,6 +122,77 @@ command = ["python", "-m", "pytest", "-q", "tests/test_documented_capabilities.p
 
 An executed command reports `live passed` on zero exit, `live failed` on nonzero exit, and `live skipped` when unavailable or timed out. Every failure is value-free. The subprocess runs at the selected repository root with stdin, stdout, and stderr disconnected, so command arguments, output, environment values, and exception text cannot enter reports. `land --dry-run` and an already-landed no-op never request live work; a mutated landing verifies after its mutations and retains its journal on any final offline or live error.
 
+## Reflection configuration
+
+An optional `[reflection]` table configures project-scoped evidence reflection. When absent, `doc-contract reflect` exits 2 with `reflection-not-configured` and does not affect other commands.
+
+```toml
+[reflection]
+source_timeout_seconds = 60
+analyzer_timeout_seconds = 180
+max_records_per_source = 500
+max_total_records = 2000
+instruction_targets = ["docs/instructions/"]
+skill_targets = ["SKILL.md"]
+spec_targets = ["docs/spec/"]
+config_targets = [".doc-contract.toml"]
+
+[[reflection.sources]]
+name = "local"
+argv = ["python", "-m", "local_adapter"]
+
+[reflection.analyzer]
+argv = ["python", "-m", "local_analyzer"]
+trust = "local"
+```
+
+### Source adapters
+
+Each `[[reflection.sources]]` entry declares a named source adapter. Adapters run in sorted name order at the repository root, receive a JSON request on stdin, and return newline-delimited JSON evidence records on stdout. The request includes repository identity, absolute root, optional `--since` date, and configured limits.
+
+Adapters must return records with schema version 1, including adapter name, stable record ID, repository identity, observation timestamp, evidence kind, SHA-256 digest, and byte length. The core validates provenance, rejects duplicates and repository mismatches, and canonicalizes records.
+
+### Analyzer
+
+An optional `[reflection.analyzer]` declares a semantic analyzer. When `trust = "external"`, the analyzer runs only with `--allow-external-analysis`. The analyzer receives normalized evidence records and returns typed findings, recommendations, nominations, and optional remediation.
+
+### Default limits
+
+Schema-1 default limits (overridable with positive integers in `[reflection]`):
+
+| Limit | Default |
+| --- | --- |
+| `source_timeout_seconds` | 60 |
+| `analyzer_timeout_seconds` | 180 |
+| `source_stdout_cap` | 1,048,576 |
+| `analyzer_stdout_cap` | 1,048,576 |
+| `max_records_per_source` | 500 |
+| `max_total_records` | 2000 |
+| `summary_cap` | 2048 |
+| `max_findings` | 200 |
+| `max_recommendations` | 100 |
+| `max_nominations` | 50 |
+| `max_candidate_requirements` | 50 |
+| `max_candidate_tasks` | 50 |
+
+### Authority and privacy
+
+Configuring a source adapter or analyzer authorizes that executable to read only what the operating environment permits; it does NOT make the executable trusted by doc-contract. Operators must review adapter behavior and evidence-store privacy before enabling it.
+
+Source adapters own source-specific redaction before output. The core adds structural validation, caps, safe diagnostics, and generated-document secret scanning but does not claim to prove a semantically sensitive non-secret sentence is safe to disclose. Configured argv and adapter/analyzer output never appear in reports or diagnostics. Raw evidence and raw analyzer output are never written to the repository, journal, report, or CLI output. `--allow-external-analysis` is a per-invocation authorization that is never persisted or inferred.
+
+### Report schema
+
+Schema-1 reports include: repository identity, selected adapters and evidence window, coverage/omission notes, evidence inventory (adapter/record ID, timestamp, kind, digest prefix), cited findings, recommendations, explicitly labelled nominations, and optional remediation. Text output is a rendering of the same object as `--format json`.
+
+### Proposal mutation
+
+Only `--write-proposal CHANGE_ID` writes `docs/changes/<id>/change.md` plus the roadmap remediation line and regenerated DAG block. The created item is always `status: proposed` / `Status: Proposed (not accepted)`. Reflection never edits `AGENTS.md`, `docs/spec/`, skills, `.doc-contract.toml`, source, or tests, never accepts, begins, executes, stages, or commits, and never promotes a global nomination. Promotion across projects is owned by a separate explicitly authorized system.
+
+### Target paths
+
+Repository-local target-path keys (`instruction_targets`, `skill_targets`, `spec_targets`, `config_targets`) are repository-relative arrays. They are the only durable paths handed to the analyzer as approved proposal targets.
+
 ## Commands
 
 The commands below are the installed or vendored `doc-contract` executable's runtime interface.
@@ -143,9 +214,14 @@ doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --diff
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/example --repo-root /path/to/repo
+doc-contract reflect --repo-root /path/to/repo
+doc-contract reflect --repo-root /path/to/repo --source local --since 2026-01-01
+doc-contract reflect --repo-root /path/to/repo --format json
+doc-contract reflect --repo-root /path/to/repo --allow-external-analysis
+doc-contract reflect --repo-root /path/to/repo --write-proposal example-remediation
 ```
 
-Discovery includes Git-tracked managed documents plus declared roots by default, including companion Markdown inside selected change folders. The resolver uses that one ordered path set for both graph validation and value-free secret scanning. Source, `.env`, generated output, dependency trees, and checked-out submodules are not scanned merely because they are below the repository root; use a dedicated security tool for repository-wide secret detection. `--include-untracked` previews provisional node IDs and paths before `update` or `land` mutates anything; without it, untracked candidates are reported and excluded from both validation and scanning. `check` is read-only and labels tolerated baseline warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap block after validation. `stamp` records or refreshes reviewed edge metadata even in advisory mode and refreshes strict frozen `self_hash` values. `sync` reconciles the complete vendored package and pin manifest, including removing stale generated runtime files, without rewriting current files.
+Discovery includes Git-tracked managed documents plus declared roots by default, including companion Markdown inside selected change folders. The resolver uses that one ordered path set for both graph validation and value-free secret scanning. Source, `.env`, generated output, dependency trees, and checked-out submodules are not scanned merely because they are below the repository root; use a dedicated security tool for repository-wide secret detection. `--include-untracked` previews provisional node IDs and paths before `update` or `land` mutates anything; without it, untracked candidates are reported and excluded from both validation and scanning. For `reflect`, `--include-untracked` is accepted for grammar parity with other commands but does not broaden evidence scope; evidence comes only from configured adapters, and the proposal projection and post-write validation always consider the newly created proposal. `check` is read-only and labels tolerated baseline warnings separately from newly introduced warnings. `update` rewrites only the generated roadmap block after validation. `stamp` records or refreshes reviewed edge metadata even in advisory mode and refreshes strict frozen `self_hash` values. `sync` reconciles the complete vendored package and pin manifest, including removing stale generated runtime files, without rewriting current files.
 `accept` and `begin` are explicit, hash-guarded, journaled transitions. `accept` records only an
 explicit user/reviewer authorization and never infers approval; `begin` starts work only from
 `accepted`. Both are offline and idempotent, preserve blocked state, and support dry-run and

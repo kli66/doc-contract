@@ -156,6 +156,65 @@ def _is_binary(data: bytes) -> bool:
     return False
 
 
+def scan_text(
+    text: str,
+    *,
+    path: str,
+    root: Path | None = None,
+    secret_env_names: Iterable[str] = (),
+) -> list[SecretFinding]:
+    """Scan UTF-8 text directly, returning sorted, value-free findings.
+
+    This is the text-scanning entry point used by reflection to scan rendered
+    Markdown without writing a transient file. The `path` argument is used for
+    the finding's path field and should identify the logical source.
+    """
+    known = {_normalise_name(name) for name in DEFAULT_SECRET_ENV_NAMES}
+    known.update(_normalise_name(name) for name in secret_env_names)
+    findings: list[SecretFinding] = []
+    seen: set[tuple[int, str]] = set()
+    env_file = _is_env_file(Path(path))
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith(("#", ";")):
+            continue
+        match = _ASSIGNMENT.match(line)
+        if match is not None:
+            name = match.group("name")
+            if match.group("operator") == ":":
+                stripped = line.lstrip()
+                if line[:1].isspace() and stripped[:1] not in {'"', "'", "{"}:
+                    continue
+                if "=" in match.group("value"):
+                    continue
+            normalised_name = _normalise_name(name)
+            if env_file or _sensitive_name(name, known):
+                present, length = _value_metadata(match.group("value"))
+                if not present and not env_file and normalised_name not in known:
+                    continue
+                finding = SecretFinding(
+                    path, line_number, normalised_name,
+                    "assignment", present, length,
+                )
+                findings.append(finding)
+                seen.add((line_number, finding.variable))
+
+        environment_context = re.search(
+            r"getenv\s*\(|(?:os\.)?environ(?:\[|\.)|process\.env|\$[A-Z_]",
+            line,
+            re.I,
+        )
+        if environment_context is not None:
+            for name in sorted(set(_ENV_NAME.findall(line)) & known):
+                if (line_number, name) in seen:
+                    continue
+                findings.append(
+                    SecretFinding(path, line_number, name,
+                                  "environment-reference", False, 0)
+                )
+                seen.add((line_number, name))
+    return sorted(findings, key=lambda item: (item.path, item.line, item.variable, item.kind))
+
+
 def scan_file(
     path: Path,
     *,
@@ -172,55 +231,12 @@ def scan_file(
     if _is_binary(data):
         return []
     text = data.decode("utf-8")
-    known = {_normalise_name(name) for name in DEFAULT_SECRET_ENV_NAMES}
-    known.update(_normalise_name(name) for name in secret_env_names)
-    findings: list[SecretFinding] = []
-    seen: set[tuple[int, str]] = set()
-    env_file = _is_env_file(path)
-    for line_number, line in enumerate(text.splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith(("#", ";")):
-            continue
-        match = _ASSIGNMENT.match(line)
-        if match is not None:
-            name = match.group("name")
-            if match.group("operator") == ":":
-                # YAML/TOML-style mapping keys are metadata, not credential assignments. Only
-                # quoted JSON/Python-like keys use colon assignment syntax in the supported scan.
-                stripped = line.lstrip()
-                if line[:1].isspace() and stripped[:1] not in {'"', "'", "{"}:
-                    continue
-                if "=" in match.group("value"):
-                    continue
-            normalised_name = _normalise_name(name)
-            if env_file or _sensitive_name(name, known):
-                present, length = _value_metadata(match.group("value"))
-                if not present and not env_file and normalised_name not in known:
-                    continue
-                finding = SecretFinding(
-                    _display_path(path, root), line_number, normalised_name,
-                    "assignment", present, length,
-                )
-                findings.append(finding)
-                seen.add((line_number, finding.variable))
-
-        # Report references to known environment names only when the line actually interacts with
-        # the environment; a list of supported names in this module or in documentation is not a
-        # credential finding.
-        environment_context = re.search(
-            r"getenv\s*\(|(?:os\.)?environ(?:\[|\.)|process\.env|\$[A-Z_]",
-            line,
-            re.I,
-        )
-        if environment_context is not None:
-            for name in sorted(set(_ENV_NAME.findall(line)) & known):
-                if (line_number, name) in seen:
-                    continue
-                findings.append(
-                    SecretFinding(_display_path(path, root), line_number, name,
-                                  "environment-reference", False, 0)
-                )
-                seen.add((line_number, name))
-    return sorted(findings, key=lambda item: (item.path, item.line, item.variable, item.kind))
+    return scan_text(
+        text,
+        path=_display_path(path, root),
+        root=root,
+        secret_env_names=secret_env_names,
+    )
 
 
 def _iter_files(root: Path) -> Iterable[Path]:

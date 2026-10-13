@@ -8,7 +8,7 @@ description: "Route a documentation lifecycle: author a change, reconcile entry/
 ## Carrier rules
 
 1. The CLI is the only thing you execute: `check`, `update`, `stamp`, `sync`, `reconcile mechanical`,
-   `accept`, `begin`, `land`.
+   `accept`, `begin`, `land`, `reflect`.
 2. The skill verbs `new-change`, `reconcile semantic`, and `install` have no shell form: never attempt
    `doc-contract <skill-verb>`.
 3. Never hand-roll what a verb owns: no manual `git mv`, hash stamp, roadmap update, or status edit.
@@ -30,6 +30,8 @@ exposes skills as slash commands — `/<skill> <verb> …`; the runtime — `doc
 | land / archive | mechanical exit report, the exit judgments in `guides/reconcile.md`, `land --dry-run`, then `land` | CLI + you | in-progress |
 | frozen document edited | `doc-contract stamp <path> --repo-root <repo>` after review | CLI | any |
 | set up in this repository | read `guides/install.md` | you | none |
+| reflect on project evidence | `doc-contract reflect --repo-root <repo>` | CLI | any |
+| author remediation proposal | `doc-contract reflect --write-proposal <id> --repo-root <repo>` | CLI | any |
 
 Lifecycle: `proposed → accept → accepted → begin → in-progress → land → landed`. Entry reconciliation
 is bracketed before `begin`; exit reconciliation before `land`. The mechanical half is evidence; the
@@ -48,6 +50,7 @@ semantic half is judgment.
 - Repository selection is always explicit (`--repo-root`) and never inferred.
 - The runtime stays stdlib-only: never add a dependency; use `string.Template` and f-strings.
 - Scanner output stays value-free: paths, lines, and names only, never values.
+- Configuring a source adapter or analyzer authorizes that executable to read only what the operating environment permits; it does NOT make the executable trusted by doc-contract. Operators must review adapter behavior and evidence-store privacy before enabling it. Source adapters own source-specific redaction before output; the core adds structural validation, caps, safe diagnostics, and generated-document secret scanning but does not claim to prove a semantically sensitive non-secret sentence is safe to disclose. Configured argv and adapter/analyzer output never appear in reports or diagnostics. Raw evidence and raw analyzer output are never written to the repository, journal, report, or CLI output. `--allow-external-analysis` is a per-invocation authorization that is never persisted or inferred.
 
 ## Read next
 

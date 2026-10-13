@@ -1,7 +1,7 @@
 ---
 id: reflect-project-evidence
 persistence: ephemeral
-status: proposed
+status: landed
 track: architecture
 depends_on:
   - portable-install-contract-convergence
@@ -14,6 +14,7 @@ files_owned:
   - src/doc_contract/resolver.py
   - src/doc_contract/transaction.py
   - src/doc_contract/cli.py
+  - src/doc_contract/secret_scan.py
   - tests/test_reflection.py
   - tests/test_config.py
   - tests/test_resolver.py
@@ -22,10 +23,14 @@ files_owned:
   - README.md
   - SKILL.md
   - docs/roadmap.md
+accepted_at: 2026-10-13
+started_at: 2026-10-13
+landed_at: 2026-10-13
+archive_path: docs/changes/archive/2026-10-13-reflect-project-evidence
 ---
 # Add project-scoped evidence reflection
 
-Status: Proposed (not accepted) · Proposed 2026-08-06
+Status: Landed · 2026-10-13
 
 **Upstream dependencies:** `portable-install-contract-convergence` is landed and establishes
 `.doc-contract.toml`, the cwd-independent packaged or vendored CLI, and stdlib-only runtime as the

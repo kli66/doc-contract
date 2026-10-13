@@ -676,6 +676,7 @@ def test_capability_surface_is_explicit() -> None:
         "begin",
         "reconcile",
         "land",
+        "reflect",
     }
 
 

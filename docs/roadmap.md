@@ -28,7 +28,7 @@ persistence: living
 
 ## Architecture
 
-- `docs/changes/reflect-project-evidence/` (proposed) — add project-scoped, evidence-backed reflection that keeps semantic source/analyzer adapters outside the deterministic stdlib resolver and emits only governed reports and remediation proposals; depends on the portable install boundary, unified verification guardrails, and explicit accepted state
+- `docs/changes/archive/2026-10-13-reflect-project-evidence/` (landed) — add project-scoped, evidence-backed reflection that keeps semantic source/analyzer adapters outside the deterministic stdlib resolver and emits only governed reports and remediation proposals; depends on the portable install boundary, unified verification guardrails, and explicit accepted state
 - `docs/changes/archive/2026-07-29-accepted-change-state/` (landed) — add explicit `accepted`, `accept`, and `begin` transitions, reusable transactional lifecycle planning, and in-progress-only landing; depends on the landed transaction and graph-projection boundaries
 - `docs/changes/archive/2026-07-24-landed-graph-transition-ownership/` (landed) — move projected landed document
   state, topology, roadmap rendering, and validation behind one resolver-owned operation; depends on
@@ -69,7 +69,7 @@ flowchart TD
     optional_project_memory["optional-project-memory (proposed)"]
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     proportional_accepted_work_contract["proportional-accepted-work-contract (proposed)"]
-    reflect_project_evidence["reflect-project-evidence (proposed)"]
+    reflect_project_evidence["reflect-project-evidence (landed)"]
     reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]
     review_bound_acceptance_plan["review-bound-acceptance-plan (proposed)"]
     runtime_source_provenance["runtime-source-provenance (proposed)"]

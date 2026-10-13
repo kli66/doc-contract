@@ -29,7 +29,7 @@ class InjectedInterruption(TransactionError):
 
 @dataclass(frozen=True, slots=True)
 class Mutation:
-    kind: Literal["write", "move"]
+    kind: Literal["write", "move", "create"]
     path: str
     destination: str | None
     before_hash: str
@@ -49,7 +49,7 @@ class Mutation:
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> Mutation:
         kind = raw.get("kind")
-        if kind not in {"write", "move"}:
+        if kind not in {"write", "move", "create"}:
             raise TransactionError("journal-invalid: unknown mutation kind")
         return cls(
             kind=kind,
@@ -91,6 +91,17 @@ def file_hash(path: Path) -> str:
         return sha(path.read_bytes())
     except OSError as exc:
         raise TransactionError(f"input-unavailable: {type(exc).__name__}") from None
+
+
+def file_hash_or_absent(path: Path) -> str:
+    """Return the hash of a file, or empty string if it does not exist.
+
+    This is used for creation mutations where the before-hash is empty for absent files.
+    """
+    try:
+        return sha(path.read_bytes())
+    except OSError:
+        return ""
 
 
 def tree_files(path: Path) -> list[Path]:
@@ -213,6 +224,24 @@ def atomic_write(path: Path, content: str) -> None:
 
 def apply_mutation(root: Path, plan: TransactionPlan, mutation: Mutation) -> None:
     path = root / mutation.path
+    if mutation.kind == "create":
+        # Creation mutation: file must not exist, content must be provided
+        if mutation.content is None:
+            raise TransactionError("mutation-invalid: create mutation missing content")
+        if path.exists():
+            # Resume-idempotent: if the destination already exists and its raw hash
+            # equals after_hash, return (a resumed journal must not report a collision)
+            current = file_hash(path)
+            if current == mutation.after_hash:
+                return
+            # If it exists with a different hash, raise destination-collision
+            raise TransactionError(f"destination-collision: {mutation.path} already exists")
+        # Verify before_hash is empty (absent) or matches current state
+        current = file_hash_or_absent(path)
+        if current != mutation.before_hash:
+            raise ConcurrentModification(f"concurrent-modification: {mutation.path}")
+        atomic_write(path, mutation.content)
+        return
     if mutation.kind == "write":
         current = file_hash(path)
         if current == mutation.after_hash:
@@ -270,6 +299,8 @@ def _completed_mutation_matches(
     try:
         mutation = mutations[index]
         path = root / _completed_path(mutation, mutations, completed, index)
+        if mutation.kind == "create":
+            return path.is_file() and file_hash(path) == mutation.after_hash
         if mutation.kind == "write":
             return path.is_file() and file_hash(path) == mutation.after_hash
         destination = root / (mutation.destination or "")

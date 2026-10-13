@@ -19,13 +19,20 @@ from .lifecycle import (
     execute_transition,
 )
 from .reconciliation import Phase, ReconciliationReport, reconcile_mechanical
+from .reflection import (
+    ReflectionError,
+    ReflectionPlan,
+    execute_reflection,
+    plan_reflection,
+    render_report_text,
+)
 from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap
 from .sync import sync_package
 from .transaction import TransactionError
 from .verification import VerificationPolicy, verify
 
 COMMANDS = frozenset(
-    {"check", "update", "stamp", "sync", "accept", "begin", "reconcile", "land"}
+    {"check", "update", "stamp", "sync", "accept", "begin", "reconcile", "land", "reflect"}
 )
 
 
@@ -81,6 +88,13 @@ def build_parser() -> argparse.ArgumentParser:
         transition.add_argument("change_ref", help="change ID or repository-relative change folder")
         transition.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
         transition.add_argument("--include-untracked", action="store_true")
+    reflect = subparsers.add_parser("reflect", parents=[common], help="reflect on project evidence")
+    reflect.add_argument("--source", action="append", help="select a specific source adapter")
+    reflect.add_argument("--since", help="inclusive date boundary for evidence (YYYY-MM-DD)")
+    reflect.add_argument("--format", choices=("text", "json"), default="text")
+    reflect.add_argument("--allow-external-analysis", action="store_true")
+    reflect.add_argument("--write-proposal", help="write a proposal with the given change ID")
+    reflect.add_argument("--include-untracked", action="store_true")
     return parser
 
 
@@ -327,6 +341,81 @@ def _transition(
     return 0
 
 
+def _print_reflection_plan(plan: ReflectionPlan) -> None:
+    report = plan.report
+    print(f"reflection plan: {report.reflection_id}")
+    print(f"repository: {report.repository}")
+    print(f"status: {report.status}")
+    print(f"sources: {', '.join(report.sources)}")
+    if report.since:
+        print(f"since: {report.since}")
+    print(f"evidence: {len(report.evidence)} records")
+    print(f"findings: {len(report.findings)}")
+    print(f"recommendations: {len(report.recommendations)}")
+    print(f"nominations: {len(report.nominations)}")
+    if plan.proposal_id is not None:
+        print(f"proposal: {plan.proposal_id}")
+        print(f"  path: {plan.proposal_path}")
+
+
+def _reflect(
+    context: Context,
+    *,
+    sources: Sequence[str],
+    since: str | None,
+    output_format: str,
+    allow_external_analysis: bool,
+    write_proposal: str | None,
+    include_untracked: bool,
+) -> int:
+    try:
+        if write_proposal is not None:
+            outcome = execute_reflection(
+                context.root,
+                context.settings,
+                sources=sources,
+                since=since,
+                allow_external_analysis=allow_external_analysis,
+                proposal_id=write_proposal,
+                include_untracked=include_untracked,
+                write_proposal=True,
+                on_plan=_print_reflection_plan if output_format == "text" else None,
+            )
+        else:
+            plan = plan_reflection(
+                context.root,
+                context.settings,
+                sources=sources,
+                since=since,
+                allow_external_analysis=allow_external_analysis,
+                include_untracked=include_untracked,
+            )
+            if output_format == "text":
+                _print_reflection_plan(plan)
+            outcome = None
+    except ReflectionError as exc:
+        print(f"ERROR: [{exc.code}] {exc.detail}", file=sys.stderr)
+        # REQ-051: configuration failures exit 2
+        if exc.code in ("reflection-not-configured", "source-unknown"):
+            return 2
+        return 1
+
+    if output_format == "json":
+        if outcome is not None and outcome.plan is not None:
+            print(json.dumps(outcome.plan.report.as_dict(), sort_keys=True, separators=(",", ":")))
+        elif outcome is None:
+            # No outcome means we just planned, so use the plan
+            print(json.dumps(plan.report.as_dict(), sort_keys=True, separators=(",", ":")))
+        else:
+            # This shouldn't happen, but handle gracefully
+            print(json.dumps({"error": "no plan"}, sort_keys=True))
+    else:
+        if outcome is not None and outcome.plan is not None:
+            print(render_report_text(outcome.plan.report))
+
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -378,6 +467,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.change_ref,
             action=TransitionAction.BEGIN,
             dry_run=args.dry_run,
+            include_untracked=args.include_untracked,
+        )
+    if args.command == "reflect":
+        return _reflect(
+            context,
+            sources=tuple(args.source) if args.source else (),
+            since=args.since,
+            output_format=args.format,
+            allow_external_analysis=args.allow_external_analysis,
+            write_proposal=args.write_proposal,
             include_untracked=args.include_untracked,
         )
     raise AssertionError(args.command)
