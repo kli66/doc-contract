@@ -214,6 +214,8 @@ doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --diff
 doc-contract land docs/changes/example --repo-root /path/to/repo --dry-run --include-untracked
 doc-contract land docs/changes/example --repo-root /path/to/repo
+doc-contract supersede docs/changes/example --reason "superseded by <successor>" --repo-root /path/to/repo --dry-run
+doc-contract supersede docs/changes/example --reason "superseded by <successor>" --repo-root /path/to/repo
 doc-contract reflect --repo-root /path/to/repo
 doc-contract reflect --repo-root /path/to/repo --source local --since 2026-01-01
 doc-contract reflect --repo-root /path/to/repo --format json
@@ -229,6 +231,16 @@ provisional `--include-untracked` planning. `land` accepts only `in-progress` ch
 move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
 returns success without changing files or the Git index. Interrupted landings resume from the
 journal under Git metadata, and concurrent edits fail closed.
+
+`supersede` retires a never-accepted `proposed` change into a frozen `docs/archive/<name>.md` record
+in one resumable, dry-runnable transaction. It requires `--reason` (recorded verbatim in the record
+body, never echoed in output), removes the active folder, retargets its roadmap line to the record
+path with `(superseded)`, regenerates the DAG, and creates the record last (staged for tracked
+plans). It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, and refuses while an
+active node still depends on the retired id. The record keeps the retired `id`, declares
+`persistence: frozen`, records `superseded_at` and a strict `self_hash`, and carries an inert
+`status: superseded` scalar. `doc-contract check` reports a `roadmap-line-dangling` ERROR when a
+folder vanishes without a lineage record, so the manual `git rm` path fails loudly.
 
 Landing output is compact by default: the plan prints source/archive/tracking facts, provisional
 nodes, warning count, mutation type totals, and every ordered write/move path, but no content patch
@@ -246,8 +258,8 @@ reconcile semantic ...` skill still decides whether ADR meaning, scope, task com
 knowledge are true before an explicit `begin` or `land` command.
 
 Lifecycle callers classify the selected reference before whole-repository preflight and share these
-stable codes: `change-proposed-unaccepted`, `change-accepted-not-started`, `change-blocked`,
-`change-already-landed`, `change-untracked-excluded`, `change-front-matter-missing`,
+stable codes: `change-proposed-unaccepted`, `change-accepted-not-started`, `change-not-proposed`,
+`change-blocked`, `change-already-landed`, `change-untracked-excluded`, `change-front-matter-missing`,
 `change-front-matter-invalid`, `change-ref-wrong-folder`, and `change-ref-unknown`. Diagnostics contain
 only normalized IDs, repository-relative paths, canonical status, and `gate_present=true|false`.
 Proposed and accepted blockers point to dry-run `accept` or `begin`; excluded untracked work replays

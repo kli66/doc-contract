@@ -1,7 +1,7 @@
 ---
 id: supersede-unaccepted-proposal
 persistence: ephemeral
-status: accepted
+status: landed
 track: lifecycle
 depends_on:
   - accepted-change-state
@@ -24,10 +24,13 @@ files_owned:
   - AGENTS.template.md
   - docs/roadmap.md
 accepted_at: 2026-10-14
+started_at: 2026-10-14
+landed_at: 2026-10-14
+archive_path: docs/changes/archive/2026-10-14-supersede-unaccepted-proposal
 ---
 # Add a supersede verb for never-accepted proposals
 
-Status: Accepted · Accepted 2026-10-14
+Status: Landed · 2026-10-14
 
 **Upstream dependencies:** `accepted-change-state` is landed and owns the explicit lifecycle machine
 `proposed → accepted → in-progress → landed`, the `accept`/`begin` transitions, and the
@@ -234,23 +237,32 @@ proposal. Remove no command, lifecycle state, resolver behavior, or frozen-linea
 ## Tasks
 
 1. Settle the five design questions above and record the answers in this ticket before implementation
-   begins; they change the work contract.
+   begins; they change the work contract. **Done** — recorded above as "Settled 2026-10-14", with the
+   removal-mutation and dependent-refusal consequences.
 2. Add the CLI surface (verb or disposition) and its `COMMANDS`/parser entry; extend the focused CLI
-   tests with dry-run, apply, refusal, and `--reason` cases.
+   tests with dry-run, apply, refusal, and `--reason` cases. **Done** — `supersede` verb with required
+   `--reason`, `--dry-run`, `--include-untracked`.
 3. Extend `classify_change` so a `proposed` node reaches the new terminal while `accepted`,
    `in-progress`, `blocked`, and `landed` nodes are still refused; extend the lifecycle diagnostics
-   table and tests.
+   table and tests. **Done** — `LifecycleRequest.SUPERSEDE`, `change-not-proposed` refusal, table row.
 4. Implement the resolver-owned transition (status/enum, lineage destination, roadmap/DAG rewrite)
    reusing the landed transaction machinery; add resolver and landing tests proving the vanished
-   active folder and the new frozen lineage node resolve cleanly.
+   active folder and the new frozen lineage node resolve cleanly. **Done** — `project_supersede`,
+   `plan_supersede`/`execute_supersede`, new `remove` mutation kind, frozen `docs/archive/<name>.md`.
 5. If design question 5 resolves to a machine check, implement the vanished-folder-without-lineage
-   detection and its `check`/preflight findings.
+   detection and its `check`/preflight findings. **Done** — `roadmap-line-dangling` ERROR in
+   `resolver.validate`, inherited by every preflight.
 6. Document the verb in `docs/spec/capabilities.md`, `README.md`, `SKILL.md`, and `AGENTS.template.md`,
    and update the capability-coverage tripwire coupling (`scripts/test_capabilities_coverage.py`)
-   accordingly.
+   accordingly. **Done** — new capability heading, diagnostics row, usage and routing entries; the
+   tripwire passes unchanged because it derives its surface from `COMMANDS`.
 7. Regenerate the roadmap DAG with `doc-contract update --repo-root .` after the roadmap line lands.
+   **Done** — the generated block is re-rendered by the lifecycle transitions themselves (`begin`
+   here, `land` on archive), so no separate `update` run is needed and none was hand-rolled.
 8. On land: amend no ADR (this repository keeps none); archive this folder through `doc-contract land`
-   and confirm the declared not-yet-existing test paths, if any, clear.
+   and confirm the declared not-yet-existing test paths, if any, clear. **Done in this landing** —
+   no ADR exists to amend, every declared `files_owned` path now exists, and this folder is archived
+   through `doc-contract land`.
 
 ## Verify
 

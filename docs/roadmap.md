@@ -50,7 +50,7 @@ persistence: living
 - `docs/changes/archive/2026-10-12-skill-routing-surface/` (landed) — make the portable skill route by user intent with stated status preconditions and stop rules, move the once-per-repository setup into a bundled guide, and bring the routing description back inside the spec limit; depends on accepted state, mechanical reconciliation, actionable lifecycle diagnostics, and the portable install contract
 - `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
 - `docs/changes/review-bound-acceptance-plan/` (proposed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
-- `docs/changes/supersede-unaccepted-proposal/` (accepted) — add a packaged supersede transition that retires a never-accepted proposed change into a frozen lineage record instead of the forbidden manual `git mv`; depends on accepted state, the landed transactional archive command, and the frozen `docs/archive/` lineage discovery
+- `docs/changes/archive/2026-10-14-supersede-unaccepted-proposal/` (landed) — add a packaged supersede transition that retires a never-accepted proposed change into a frozen lineage record instead of the forbidden manual `git mv`; depends on accepted state, the landed transactional archive command, and the frozen `docs/archive/` lineage discovery
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
@@ -75,7 +75,7 @@ flowchart TD
     runtime_source_provenance["runtime-source-provenance (proposed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     skill_routing_surface["skill-routing-surface (landed)"]
-    supersede_unaccepted_proposal["supersede-unaccepted-proposal (accepted)"]
+    supersede_unaccepted_proposal["supersede-unaccepted-proposal (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
     vendored_runtime_closure["vendored-runtime-closure (landed)"]

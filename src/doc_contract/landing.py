@@ -7,7 +7,7 @@ import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from .config import Settings
 from .lifecycle import (
@@ -22,9 +22,11 @@ from .resolver import (
     DAG_END,
     Finding,
     project_landing,
+    project_supersede,
     resolve,
 )
 from .transaction import (
+    ABSENT_HASH,
     ConcurrentModification,
     InjectedInterruption,
     Mutation,
@@ -366,6 +368,245 @@ def _load_journal(path: Path) -> tuple[LandingPlan, list[int]]:
 
 def _journal_for(root: Path, change_id: str) -> Path:
     return _git_path(root, change_id)
+
+
+def _supersede_journal_path(root: Path, change_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "-", change_id)
+    return git_metadata_path(
+        root, f"doc-contract/supersede-{safe}.json", operation="supersede"
+    )
+
+
+def _plan_mutation_hash(mutations: Sequence[Mutation], *, after: bool) -> str:
+    pieces = []
+    for mutation in mutations:
+        digest = mutation.after_hash if after else mutation.before_hash
+        pieces.append(f"{mutation.path}\0{digest}\n")
+    return _sha("".join(pieces).encode("utf-8"))
+
+
+def _plan_supersede(
+    root: Path,
+    settings: Settings,
+    ref: str,
+    *,
+    date: str | None = None,
+    include_untracked: bool = False,
+    reason: str,
+) -> LandingPlan:
+    root = root.resolve()
+    if not isinstance(reason, str) or not reason.strip():
+        raise LandingError("reason-invalid: supersede requires a non-empty reason")
+    day = date or _datetime.date.today().isoformat()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise LandingError("date-invalid: expected YYYY-MM-DD")
+    selection = classify_change(
+        root,
+        settings,
+        ref,
+        action=LifecycleRequest.SUPERSEDE,
+        include_untracked=include_untracked,
+    )
+    if selection.diagnostic is not None:
+        raise LifecycleError(
+            selection.diagnostic,
+            change_id=selection.change_id,
+            path=selection.path,
+            status=selection.status,
+        )
+    result = _resolve_preflight(
+        root,
+        settings,
+        include_untracked=include_untracked,
+    )
+    if result.errors:
+        raise LandingError(
+            "preflight-invalid: repository has resolver errors",
+            findings=tuple(result.errors),
+        )
+    if len(result.topo_order) != len(result.nodes):
+        raise LandingError(
+            "preflight-invalid: dependency graph contains a cycle",
+            findings=tuple(finding for finding in result.findings if finding.code == "cycle"),
+        )
+    change_id = selection.change_id
+    source = root / selection.path
+    source_rel = selection.path
+    record_rel = f"docs/archive/{source.name}.md"
+    if (root / record_rel).exists():
+        raise LandingError("destination-collision: lineage record already exists")
+    tracking = selection.tracking
+    if not (source / "change.md").is_file():
+        raise LandingError("change-invalid: change.md is missing")
+    current_roadmap = (root / settings.roadmap).read_text(encoding="utf-8")
+    try:
+        projection = project_supersede(
+            root,
+            settings,
+            result,
+            change_id=change_id,
+            record_path=root / record_rel,
+            record_relative=record_rel,
+            superseded_at=day,
+            reason=reason,
+            planned_roadmap_text=current_roadmap,
+        )
+    except ValueError as exc:
+        raise LandingError(str(exc)) from None
+    if projection.resolution.errors:
+        raise LandingError(
+            "preflight-invalid: planned repository state fails validation",
+            findings=tuple(projection.resolution.errors),
+        )
+    roadmap_new = _roadmap_output(projection.roadmap_text, projection.roadmap_block)
+    # Removal executes before the roadmap rewrite and record creation is last, so no
+    # interruption boundary can leave an unresolvable state; a mid-state resolve either
+    # completes or fails closed with a value-free finding, never a traceback.
+    mutations: list[Mutation] = [
+        Mutation(
+            "remove",
+            source_rel,
+            None,
+            _tree_hash(source),
+            ABSENT_HASH,
+        ),
+        Mutation(
+            "write",
+            settings.roadmap,
+            None,
+            _file_hash(root / settings.roadmap),
+            _sha(roadmap_new.encode("utf-8")),
+            roadmap_new,
+        ),
+        Mutation(
+            "create",
+            record_rel,
+            None,
+            ABSENT_HASH,
+            _sha(projection.record_document.content.encode("utf-8")),
+            projection.record_document.content,
+            staged=tracking == "tracked",
+        ),
+    ]
+    journal_path = _supersede_journal_path(root, change_id)
+    return LandingPlan(
+        change_id=change_id,
+        source=source_rel,
+        archive=record_rel,
+        date=day,
+        tracking=tracking,
+        mutations=tuple(mutations),
+        diff=None,
+        input_tree_hash=_plan_mutation_hash(mutations, after=False),
+        output_tree_hash=_plan_mutation_hash(mutations, after=True),
+        journal_path=journal_path.as_posix(),
+        provisional_nodes=tuple(
+            (record.node_id, record.path) for record in result.discovery if record.included
+        ),
+        baseline_warnings=tuple(result.warnings),
+    )
+
+
+def plan_supersede(
+    root: Path,
+    settings: Settings,
+    ref: str,
+    *,
+    date: str | None = None,
+    include_untracked: bool = False,
+    reason: str,
+) -> LandingPlan:
+    try:
+        return _plan_supersede(
+            root,
+            settings,
+            ref,
+            date=date,
+            include_untracked=include_untracked,
+            reason=reason,
+        )
+    except LandingError:
+        raise
+    except LifecycleError:
+        raise
+    except TransactionError as exc:
+        raise LandingError(str(exc)) from None
+
+
+def execute_supersede(
+    root: Path,
+    settings: Settings,
+    ref: str,
+    *,
+    reason: str,
+    date: str | None = None,
+    include_untracked: bool = False,
+    dry_run: bool = False,
+    fault_after: int | None = None,
+    on_plan: Callable[[LandingPlan], None] | None = None,
+) -> LandingOutcome:
+    root = root.resolve()
+    if not isinstance(reason, str) or not reason.strip():
+        raise LandingError("reason-invalid: supersede requires a non-empty reason")
+    journal_hint = _supersede_journal_path(root, Path(ref).name)
+    if journal_hint.is_file() and not dry_run:
+        plan, completed = _load_journal(journal_hint)
+        journal_path = journal_hint
+    else:
+        selection = classify_change(
+            root,
+            settings,
+            ref,
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=include_untracked,
+        )
+        journal_path = _supersede_journal_path(root, selection.change_id)
+        if journal_path.is_file() and not dry_run:
+            plan, completed = _load_journal(journal_path)
+        else:
+            if selection.diagnostic is not None:
+                raise LifecycleError(
+                    selection.diagnostic,
+                    change_id=selection.change_id,
+                    path=selection.path,
+                    status=selection.status,
+                )
+            plan = plan_supersede(
+                root,
+                settings,
+                ref,
+                date=date,
+                include_untracked=include_untracked,
+                reason=reason,
+            )
+            completed = []
+    if on_plan is not None:
+        on_plan(plan)
+    if dry_run:
+        return LandingOutcome(plan, False)
+    execute_mutations(
+        root,
+        plan,
+        journal_path,
+        completed,
+        fault_after=fault_after,
+        save=_save_journal,
+    )
+    final = resolve(root, settings, include_untracked=include_untracked)
+    verification = verify(
+        final,
+        VerificationPolicy(
+            repo_root=settings.repo_root,
+            capability_mode=settings.capability_mode,
+            capability_command=settings.capability_command,
+            live_requested=True,
+        ),
+        baseline_warnings=plan.baseline_warnings,
+    )
+    if verification.errors:
+        return LandingOutcome(plan, False, verification)
+    journal_path.unlink(missing_ok=True)
+    return LandingOutcome(plan, False, verification)
 
 
 def execute_landing(

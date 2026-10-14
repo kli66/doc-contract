@@ -677,6 +677,7 @@ def test_capability_surface_is_explicit() -> None:
         "reconcile",
         "land",
         "reflect",
+        "supersede",
     }
 
 
@@ -1066,3 +1067,126 @@ def test_installed_and_vendored_reconciliation_work_from_unrelated_cwd(
     assert json.loads(vendored_blocker.stdout) == blocker_payload
     assert blocker_payload["findings"][0]["code"] == "change-proposed-unaccepted"
     assert blocker_payload["next_command"] == "doc-contract accept example --dry-run"
+
+
+def test_supersede_parser_requires_reason_and_empty_reason_fails_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+    with pytest.raises(SystemExit) as missing:
+        main(["supersede", "example", "--repo-root", str(repo)])
+    assert missing.value.code == 2
+    captured = capsys.readouterr()
+    assert "reason" in captured.err
+    assert "Traceback" not in captured.err
+
+    source = repo / "docs/changes/example/change.md"
+    before = source.read_bytes()
+    assert main(["supersede", "example", "--reason", "", "--repo-root", str(repo)]) == 1
+    captured = capsys.readouterr()
+    assert "reason-invalid" in captured.err
+    assert source.read_bytes() == before
+    assert not list((repo / ".git").glob("doc-contract/supersede-*.json"))
+
+
+_REASON_MARKER = "ZZ-SUPERSEDE-REASON-MARKER"
+
+
+def _assert_reason_marker_absent(out: str, err: str) -> None:
+    """Fail without ever echoing the reason marker: the assertion reports only the boolean
+    leak flag, never the marker text or the captured stream contents."""
+    leaked = _REASON_MARKER in out or _REASON_MARKER in err
+    assert not leaked, "supersede leaked the --reason text into stdout or stderr"
+
+
+def test_supersede_never_echoes_reason_marker(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+    assert (
+        main(
+            [
+                "supersede",
+                "example",
+                "--reason",
+                _REASON_MARKER,
+                "--repo-root",
+                str(repo),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    _assert_reason_marker_absent(captured.out, captured.err)
+    assert "supersede plan: example\n" in captured.out
+    assert "  remove docs/changes/example\n" in captured.out
+    assert "  create docs/archive/example.md\n" in captured.out
+
+
+def test_supersede_reason_marker_absent_on_non_proposed_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _lifecycle_repo(tmp_path / "repo", "accepted")
+    assert (
+        main(
+            ["supersede", "example", "--reason", _REASON_MARKER, "--repo-root", str(repo)]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "change-not-proposed" in captured.err
+    _assert_reason_marker_absent(captured.out, captured.err)
+
+
+def test_supersede_reason_marker_absent_on_roadmap_invalid_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+    roadmap = repo / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8").replace("(proposed)", ""),
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            ["supersede", "example", "--reason", _REASON_MARKER, "--repo-root", str(repo)]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "roadmap-invalid" in captured.err
+    _assert_reason_marker_absent(captured.out, captured.err)
+
+
+def test_supersede_reason_marker_absent_on_dependent_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+    _write(
+        repo,
+        "docs/changes/dependent/change.md",
+        "---\nid: dependent\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "depends_on:\n  - example\n---\n# Dependent\n",
+    )
+    roadmap = repo / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8").replace(
+            "<!-- BEGIN GENERATED DAG",
+            "- `docs/changes/dependent/` (proposed)\n\n<!-- BEGIN GENERATED DAG",
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "docs/changes/dependent/change.md"],
+        check=True,
+    )
+    assert (
+        main(
+            ["supersede", "example", "--reason", _REASON_MARKER, "--repo-root", str(repo)]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert "preflight-invalid" in captured.err
+    _assert_reason_marker_absent(captured.out, captured.err)

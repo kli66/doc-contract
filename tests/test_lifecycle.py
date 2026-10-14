@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from doc_contract.cli import main
+from doc_contract.landing import execute_supersede, plan_supersede
 from doc_contract.lifecycle import (
     ConcurrentModification,
     InjectedInterruption,
@@ -774,3 +775,123 @@ def test_annotated_and_canonical_accept_plans_have_identical_mutation_shape(
     assert dependent.content is not None
     assert f"transactional: {fingerprint(change.content or '')}" in dependent.content
     assert plans[0].input_tree_hash != plans[0].output_tree_hash
+
+
+# ------------------------------------------------------------- supersede classification gate
+#
+# Supersede admits only a never-accepted `proposed` change; every other status is refused
+# before whole-repository preflight with stable, value-free diagnostics, and `land` keeps
+# its in-progress-only precondition untouched.
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code", "expected_message"),
+    [
+        ("accepted", "change-not-proposed", "change transactional has status=accepted; supersede requires proposed"),
+        ("in-progress", "change-not-proposed", "change transactional has status=in-progress; supersede requires proposed"),
+        ("blocked", "change-blocked", "change transactional has status=blocked; gate_present=false"),
+    ],
+)
+def test_supersede_refuses_every_non_proposed_status(
+    tmp_path: Path, status: str, expected_code: str, expected_message: str
+) -> None:
+    root = _repo(tmp_path / status)
+    _status(root, status)
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == expected_code
+    assert captured.value.diagnostic.message == expected_message
+    assert captured.value.diagnostic.next_command is None
+    assert "private-gate-text" not in captured.value.diagnostic.message
+
+
+def test_supersede_admits_proposed_and_honors_landed_diagnostic(tmp_path: Path) -> None:
+    proposed = _repo(tmp_path / "proposed")
+    _proposed(proposed)
+    selection = classify_change(
+        proposed,
+        _settings(proposed),
+        "transactional",
+        action=LifecycleRequest.SUPERSEDE,
+        include_untracked=True,
+    )
+    assert selection.change_id == "transactional"
+    assert selection.status == "proposed"
+    assert selection.diagnostic is None
+
+    landed = _repo(tmp_path / "landed")
+    _archive(landed)
+    landed_selection = classify_change(
+        landed,
+        _settings(landed),
+        "transactional",
+        action=LifecycleRequest.SUPERSEDE,
+        include_untracked=True,
+    )
+    assert landed_selection.diagnostic is not None
+    assert landed_selection.diagnostic.code == "change-already-landed"
+    assert landed_selection.diagnostic.message == "change transactional has status=landed"
+
+
+def test_supersede_refuses_a_landed_change_end_to_end(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _archive(root)
+    for executor in (
+        lambda: plan_supersede(
+            root,
+            _settings(root),
+            "transactional",
+            reason="reason",
+            date="2026-07-23",
+            include_untracked=True,
+        ),
+        lambda: execute_supersede(
+            root,
+            _settings(root),
+            "transactional",
+            reason="reason",
+            date="2026-07-23",
+            include_untracked=True,
+        ),
+    ):
+        with pytest.raises(LifecycleError) as captured:
+            executor()
+        assert captured.value.diagnostic.code == "change-already-landed"
+    assert not list((root / ".git").glob("doc-contract/supersede-*.json"))
+
+
+def test_supersede_untracked_exclusion_precedes_classification(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _proposed(root)
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=False,
+        )
+    assert captured.value.diagnostic.code == "change-untracked-excluded"
+    assert captured.value.diagnostic.next_command == (
+        "doc-contract supersede transactional --dry-run --include-untracked"
+    )
+
+
+def test_land_still_refuses_a_proposed_change(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _proposed(root)
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "transactional",
+            action=LifecycleRequest.LAND,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-proposed-unaccepted"

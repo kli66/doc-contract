@@ -18,10 +18,13 @@ from doc_contract.resolver import (
     Node,
     Resolution,
     fingerprint,
+    parse_front_matter,
     project_landing,
     project_proposal,
+    project_supersede,
     render_block,
     resolve,
+    validate,
 )
 
 
@@ -1101,3 +1104,212 @@ Status: Proposed (not accepted) · Proposed 2026-01-01
 
     # Compare Mermaid blocks
     assert projection.roadmap_block == render_block(final)
+
+
+# ------------------------------------------------ roadmap-line-dangling guard (REQ-014)
+#
+# A roadmap prose line that references an absent active change folder with no lineage
+# record is the manual-deletion hole supersede closes: ERROR, over the configured roadmap
+# text with the generated DAG excluded, and silent for every legitimate shape.
+
+
+def _dangling_repo(root: Path, *, entry: str) -> Path:
+    _write(root, "docs/roadmap.md", _roadmap() + entry)
+    _git(root, "init", "-q")
+    _git(root, "add", "docs/roadmap.md")
+    return root
+
+
+_DAG = (
+    "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+    "```mermaid\nflowchart TD\n    gone[\"gone (proposed)\"]\n```\n"
+    "<!-- END GENERATED DAG -->\n"
+)
+
+
+def test_dangling_roadmap_line_without_lineage_is_an_error(tmp_path: Path) -> None:
+    root = _dangling_repo(tmp_path / "repo", entry="- `docs/changes/gone/` (proposed)\n")
+    result = resolve(root, _settings(root))
+    finding = next(f for f in result.errors if f.code == "roadmap-line-dangling")
+    assert finding.subjects == ("gone",)
+    assert "docs/changes/gone/" in finding.message
+
+
+def test_dangling_roadmap_line_with_frozen_record_is_clean(tmp_path: Path) -> None:
+    root = _dangling_repo(tmp_path / "repo", entry="- `docs/changes/gone/` (proposed)\n")
+    record = (
+        "---\nid: gone\npersistence: frozen\nstatus: superseded\n"
+        "superseded_at: 2026-01-01\nself_hash: PENDING\n---\n# gone\n"
+    )
+    record = record.replace("self_hash: PENDING", f"self_hash: {fingerprint(record)}")
+    _write(root, "docs/archive/gone.md", record)
+    result = resolve(root, _settings(root), include_untracked=True)
+    assert not [f for f in result.errors if f.code == "roadmap-line-dangling"]
+    assert result.nodes["gone"].kind == "archive"
+    assert result.nodes["gone"].status is None
+
+
+def test_dangling_roadmap_line_with_landed_archive_folder_is_clean(tmp_path: Path) -> None:
+    root = _dangling_repo(tmp_path / "repo", entry="- `docs/changes/gone/` (proposed)\n")
+    _write(
+        root,
+        "docs/changes/archive/2026-01-01-gone/change.md",
+        "---\nid: gone\npersistence: ephemeral\nstatus: landed\ntrack: test\n---\n# gone\n",
+    )
+    result = resolve(root, _settings(root))
+    assert not [f for f in result.errors if f.code == "roadmap-line-dangling"]
+
+
+def test_dangling_guard_stays_silent_for_legitimate_shapes(tmp_path: Path) -> None:
+    # Live folder, archive-folder reference, statusless cross-reference line, and a
+    # reference that only exists inside the generated DAG block.
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _roadmap("live"))
+    _write(root, "docs/changes/live/change.md", _change("live"))
+    _write(
+        root,
+        "docs/roadmap.md",
+        _roadmap("live")
+        + "- `docs/changes/archive/2026-01-01-gone/` (landed) — archive reference\n"
+        + "- see `docs/changes/absent/` for the earlier proposal\n"
+        + _DAG,
+    )
+    _write(
+        root,
+        "docs/changes/archive/2026-01-01-gone/change.md",
+        "---\nid: gone\npersistence: ephemeral\nstatus: landed\ntrack: test\n---\n# gone\n",
+    )
+    _git(root, "init", "-q")
+    _git(root, "add", "docs")
+    result = resolve(root, _settings(root))
+    assert not [f for f in result.errors if f.code == "roadmap-line-dangling"]
+
+
+def test_dangling_guard_uses_the_projected_roadmap_text(tmp_path: Path) -> None:
+    root = _dangling_repo(tmp_path / "repo", entry="- `docs/changes/gone/` (proposed)\n")
+    settings = _settings(root)
+    result = resolve(root, settings)
+    assert "roadmap-line-dangling" in {f.code for f in result.errors}
+    projected = validate(
+        root,
+        result.nodes,
+        [],
+        settings,
+        roadmap_override=(
+            "---\npersistence: living\n---\n# Roadmap\n\n"
+            "- `docs/archive/gone.md` (superseded)\n"
+        ),
+    )
+    assert not [f for f in projected if f.code == "roadmap-line-dangling"]
+
+
+# -------------------------------- supersede record + projection (REQ-003/007/008/015)
+
+
+def _supersede_roadmap(*entries: str) -> str:
+    return _roadmap(*entries) + "\n" + _DAG
+
+
+def _supersede_resolution(root: Path) -> Resolution:
+    return resolve(root, _settings(root), include_untracked=True)
+
+
+def test_project_supersede_builds_the_frozen_record_and_retargets_the_entry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    reason = "superseded by the successor design — recorded verbatim"
+    _write(root, "docs/roadmap.md", _supersede_roadmap("gone"))
+    _write(root, "docs/changes/gone/change.md", _change("gone"))
+    _git(root, "init", "-q")
+    _git(root, "add", "docs")
+    settings = _settings(root)
+    result = _supersede_resolution(root)
+    record_path = root / "docs/archive/gone.md"
+
+    projection = project_supersede(
+        root,
+        settings,
+        result,
+        change_id="gone",
+        record_path=record_path,
+        record_relative="docs/archive/gone.md",
+        superseded_at="2026-08-03",
+        reason=reason,
+        planned_roadmap_text=(root / "docs/roadmap.md").read_text(encoding="utf-8"),
+    )
+
+    assert "gone" not in projection.resolution.nodes
+    record = projection.record_document.content
+    values = parse_front_matter(record)
+    assert values is not None
+    assert values["id"] == "gone"
+    assert values["persistence"] == "frozen"
+    assert values["status"] == "superseded"
+    assert values["superseded_at"] == "2026-08-03"
+    assert values["self_hash"] == fingerprint(record)
+    assert reason in record.split("---", 2)[2]
+    assert "Superseded 2026-08-03" in record
+    assert reason not in record.split("---")[0] + record.split("---")[1]
+    assert not projection.resolution.errors
+    assert "- `docs/archive/gone.md` (superseded)" in projection.roadmap_text
+    assert "docs/changes/gone" not in projection.roadmap_text
+    assert "gone" not in projection.roadmap_block
+
+
+def test_project_supersede_leaves_dependent_edges_unrewritten(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _supersede_roadmap("gone", "dependent"))
+    _write(root, "docs/changes/gone/change.md", _change("gone"))
+    _write(
+        root,
+        "docs/changes/dependent/change.md",
+        _change("dependent").replace("track: test\n", "track: test\ndepends_on:\n  - gone\n"),
+    )
+    _git(root, "init", "-q")
+    _git(root, "add", "docs")
+    settings = _settings(root)
+    result = _supersede_resolution(root)
+
+    projection = project_supersede(
+        root,
+        settings,
+        result,
+        change_id="gone",
+        record_path=root / "docs/archive/gone.md",
+        record_relative="docs/archive/gone.md",
+        superseded_at="2026-08-03",
+        reason="reason",
+        planned_roadmap_text=(root / "docs/roadmap.md").read_text(encoding="utf-8"),
+    )
+
+    assert "unknown-dependency" in {f.code for f in projection.resolution.errors}
+
+
+def test_project_supersede_fails_closed_without_a_roadmap_entry(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(root, "docs/roadmap.md", _supersede_roadmap())
+    _write(root, "docs/changes/gone/change.md", _change("gone"))
+    _git(root, "init", "-q")
+    _git(root, "add", "docs")
+    settings = _settings(root)
+    result = _supersede_resolution(root)
+
+    with pytest.raises(ValueError, match="roadmap-invalid: no roadmap line for gone"):
+        project_supersede(
+            root,
+            settings,
+            result,
+            change_id="gone",
+            record_path=root / "docs/archive/gone.md",
+            record_relative="docs/archive/gone.md",
+            superseded_at="2026-08-03",
+            reason="reason",
+            planned_roadmap_text=(root / "docs/roadmap.md").read_text(encoding="utf-8"),
+        )
+
+
+def test_change_status_set_stays_closed(tmp_path: Path) -> None:
+    assert resolver_module.CHANGE_STATUSES == frozenset(
+        {"proposed", "accepted", "in-progress", "blocked", "landed"}
+    )

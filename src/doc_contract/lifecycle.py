@@ -49,6 +49,7 @@ class LifecycleRequest(str, Enum):
     RECONCILE_ENTRY = "reconcile-entry"
     RECONCILE_EXIT = "reconcile-exit"
     LAND = "land"
+    SUPERSEDE = "supersede"
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,12 +439,25 @@ def classify_change(
             status=status,
             gate_present=gate_present,
         )
-    if status == "proposed" and request is not LifecycleRequest.ACCEPT:
+    if status == "proposed" and request not in {
+        LifecycleRequest.ACCEPT,
+        LifecycleRequest.SUPERSEDE,
+    }:
         _raise_diagnostic(
             _diagnostic(
                 "change-proposed-unaccepted",
                 f"change {change_id} has status=proposed and is not accepted",
                 _canonical_command(LifecycleRequest.ACCEPT, change_id),
+            ),
+            change_id=change_id,
+            path=relative,
+            status=status,
+        )
+    if request is LifecycleRequest.SUPERSEDE and status not in {"proposed", "landed"}:
+        _raise_diagnostic(
+            _diagnostic(
+                "change-not-proposed",
+                f"change {change_id} has status={status}; supersede requires proposed",
             ),
             change_id=change_id,
             path=relative,
@@ -469,7 +483,7 @@ def classify_change(
             "change-already-landed",
             f"change {change_id} has status=landed",
         )
-        if request is not LifecycleRequest.LAND:
+        if request not in {LifecycleRequest.LAND, LifecycleRequest.SUPERSEDE}:
             _raise_diagnostic(
                 diagnostic,
                 change_id=change_id,

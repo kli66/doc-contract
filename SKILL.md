@@ -8,7 +8,7 @@ description: "Route a documentation lifecycle: author a change, reconcile entry/
 ## Carrier rules
 
 1. The CLI is the only thing you execute: `check`, `update`, `stamp`, `sync`, `reconcile mechanical`,
-   `accept`, `begin`, `land`, `reflect`.
+   `accept`, `begin`, `land`, `supersede`, `reflect`.
 2. The skill verbs `new-change`, `reconcile semantic`, and `install` have no shell form: never attempt
    `doc-contract <skill-verb>`.
 3. Never hand-roll what a verb owns: no manual `git mv`, hash stamp, roadmap update, or status edit.
@@ -28,12 +28,14 @@ exposes skills as slash commands — `/<skill> <verb> …`; the runtime — `doc
 | review approved | `doc-contract accept <change> --repo-root <repo>` | CLI | proposed |
 | pick up / entry | mechanical entry report, the entry judgments in `guides/reconcile.md`, then `doc-contract begin <change>` | CLI + you | accepted |
 | land / archive | mechanical exit report, the exit judgments in `guides/reconcile.md`, `land --dry-run`, then `land` | CLI + you | in-progress |
+| retire a never-accepted proposal | `doc-contract supersede <change> --reason <text> --repo-root <repo>` | CLI | proposed |
 | frozen document edited | `doc-contract stamp <path> --repo-root <repo>` after review | CLI | any |
 | set up in this repository | read `guides/install.md` | you | none |
 | reflect on project evidence | `doc-contract reflect --repo-root <repo>` | CLI | any |
 | author remediation proposal | `doc-contract reflect --write-proposal <id> --repo-root <repo>` | CLI | any |
 
-Lifecycle: `proposed → accept → accepted → begin → in-progress → land → landed`. Entry reconciliation
+Lifecycle: `proposed → accept → accepted → begin → in-progress → land → landed`. A never-accepted
+`proposed` change retires through `supersede` instead of `land`. Entry reconciliation
 is bracketed before `begin`; exit reconciliation before `land`. The mechanical half is evidence; the
 semantic half is judgment.
 
@@ -42,6 +44,8 @@ semantic half is judgment.
 - A live contradiction with an ADR or an importer stops the work and is surfaced; never edit the ADR
   or the change to match the other.
 - An unaccepted folder never begins work; a blocked one stays under manual handling.
+- A never-accepted proposal retires through `supersede`, never a manual `git mv`; `check` flags a
+  folder that vanished without a lineage record.
 - A trivial edit earns a roadmap line and no folder.
 - A not-ready mechanical report stops the transition instead of being improvised around.
 

@@ -904,6 +904,56 @@ def validate(
                 )
             )
 
+    # Manual-retirement teeth (ERROR): a roadmap prose line that references an active change
+    # folder which is absent, with no lineage record in either archive location, means a folder
+    # was deleted outside a resolver-owned transition (`supersede` or `land`). Only
+    # entry-shaped lines are judged — exactly one change-folder reference plus a status
+    # presentation — so live folders, `docs/changes/archive/` references, cross-reference
+    # lines, statusless prose, and wrapped continuation lines never fire. The generated DAG
+    # is already stripped from `roadmap`.
+    node_folder_names = {
+        node.path.parent.name for node in nodes.values() if node.kind == "change"
+    }
+    dangling: set[str] = set()
+    changes_root = _doc_path(root, "changes")
+    archive_root = _doc_path(root, "archive")
+    landed_archive_root = changes_root / "archive"
+    for line in roadmap.splitlines():
+        references = {
+            name
+            for name in re.findall(r"docs/changes/([A-Za-z0-9][A-Za-z0-9_.-]*)/", line)
+            if name != "archive"
+        }
+        if len(references) != 1:
+            continue
+        if not any(token in line.lower() for token, _ in _STATUS_TOKENS):
+            continue
+        name = next(iter(references))
+        if name in dangling:
+            continue
+        if name in node_folder_names:
+            continue
+        if (changes_root / name).is_dir():
+            continue
+        if (archive_root / f"{name}.md").is_file():
+            continue
+        if landed_archive_root.is_dir() and any(
+            entry.is_dir() and entry.name.endswith(f"-{name}")
+            for entry in landed_archive_root.iterdir()
+        ):
+            continue
+        dangling.add(name)
+    for name in sorted(dangling):
+        findings.append(
+            Finding(
+                "ERROR",
+                "roadmap-line-dangling",
+                f"roadmap references docs/changes/{name}/ but the folder is absent and no "
+                "lineage record exists at docs/archive/ or docs/changes/archive/",
+                (name,),
+            )
+        )
+
     # Entry preflight: declared ownership and test paths must resolve before a change can land.
     # Proposed changes may name files that do not exist yet; keep that state visible as WARN.
     for n in sorted(nodes.values(), key=lambda x: x.id):
@@ -1452,6 +1502,174 @@ def project_transition(
         destination_status=destination,
         accepted_at=accepted_at,
         started_at=started_at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SupersedeProjection:
+    record_document: ProjectedDocument
+    resolution: ProjectedResolution
+    roadmap_block: str
+    roadmap_text: str
+
+    @property
+    def findings(self) -> tuple[Finding, ...]:
+        return self.resolution.findings
+
+
+def _superseded_record_text(change_id: str, superseded_at: str, reason: str) -> str:
+    """Render the frozen lineage record for a superseded never-accepted proposal.
+
+    The record keeps the retired change's `id` and is frozen both by declaration and by its
+    `docs/archive/` location. `self_hash` is the strict canonical-body hash computed with the
+    existing fingerprint machinery — the front matter is stripped, so it is not
+    self-referential and `stamp` reproduces it. The `--reason` text is recorded verbatim in
+    the body — never in front matter — together with the dated superseded status line.
+    `status: superseded` is inert documentation: no resolver path consumes it as a change
+    status (`CHANGE_STATUSES` is unchanged).
+    """
+    values: dict[str, FMValue] = {
+        "id": change_id,
+        "persistence": "frozen",
+        "status": "superseded",
+        "superseded_at": superseded_at,
+    }
+    body = f"# {change_id}\n\nStatus: Superseded · Superseded {superseded_at}\n\n{reason}\n"
+    values["self_hash"] = fingerprint(_render_front_matter(dict(values), body))
+    return _render_front_matter(values, body)
+
+
+def _roadmap_supersede_text(
+    text: str,
+    *,
+    needle: str,
+    replacement: str,
+    source_status: str,
+    change_dirs: set[str],
+    node_id: str,
+) -> str:
+    """Retarget the retired change's roadmap prose entry to its frozen lineage record.
+
+    The entry's `docs/changes/<name>/` reference is replaced by the `docs/archive/<name>.md`
+    record path and its source-status presentation by `(superseded)`; every other byte of the
+    entry (em-dash rationale, wrapped continuation lines, line terminator) and every other
+    line survive, and the line is never deleted. A missing, duplicated, statusless, unclosed,
+    or ambiguous entry fails closed — before projected validation and before any mutation —
+    with a value-free `roadmap-invalid` detail.
+    """
+    if DAG_BEGIN_PREFIX not in text or DAG_END not in text:
+        raise ValueError("roadmap-invalid: generated DAG markers are missing")
+    lines = text.splitlines(keepends=True)
+    generated = _generated_dag_range(lines)
+    candidates = [
+        index
+        for index, line in enumerate(lines)
+        if index not in generated and needle in line
+    ]
+    if not candidates:
+        raise ValueError(f"roadmap-invalid: no roadmap line for {node_id}")
+    if len(candidates) > 1:
+        raise ValueError(f"roadmap-invalid: ambiguous roadmap line for {node_id}")
+    start = candidates[0]
+    if any(other.lower() in lines[start].lower() for other in change_dirs - {needle}):
+        raise ValueError(f"roadmap-invalid: ambiguous roadmap line for {node_id}")
+    end = start
+    while (
+        end + 1 < len(lines)
+        and end + 1 not in generated
+        and lines[end + 1].strip()
+        and lines[end + 1][:1].isspace()
+    ):
+        end += 1
+    tokens = _status_source_tokens(source_status)
+    spans: list[tuple[int, int, int]] = []
+    for index in range(start, end + 1):
+        for span_start, span_end in _status_spans(lines[index], tokens):
+            spans.append((index, span_start, span_end))
+    if len(spans) != 1:
+        raise ValueError(f"roadmap-invalid: unrewritable roadmap status for {node_id}")
+    span_index, span_start, span_end = spans[0]
+    for index in range(start, end + 1):
+        line = lines[index]
+        if index == span_index:
+            line = line[:span_start] + "(superseded)" + line[span_end:]
+        if needle in line:
+            line = line.replace(needle, replacement)
+        lines[index] = line
+    return "".join(lines)
+
+
+def project_supersede(
+    root: Path,
+    settings: Settings,
+    result: Resolution,
+    *,
+    change_id: str,
+    record_path: Path,
+    record_relative: str,
+    superseded_at: str,
+    reason: str,
+    planned_roadmap_text: str,
+) -> SupersedeProjection:
+    """Project one complete superseded document-graph state without mutating caller-owned input.
+
+    Every change node inside the retired folder is removed and dependent edges are never
+    rewritten: a node that still `depends_on` a retired id fails projected validation with the
+    existing `unknown-dependency` finding, so the retirement is refused instead of silently
+    repairing another change's edges. The record node itself is deliberately not part of the
+    projected graph — it does not exist yet — so its content and strict `self_hash` are
+    verified by post-apply resolution. The selected roadmap prose entry is retargeted to the
+    record path by the same validation grammar that recognizes it.
+    """
+    nodes = copy.deepcopy(result.nodes)
+    change = nodes.get(change_id)
+    if change is None or change.kind != "change" or not change.path.is_file():
+        raise ValueError(f"change-invalid: unknown change id {change_id!r}")
+    retired_folder = change.path.parent
+    record_text = _superseded_record_text(change_id, superseded_at, reason)
+    retired_ids = [
+        node_id
+        for node_id, node in nodes.items()
+        if node.kind == "change" and retired_folder in node.path.parents
+    ]
+    for node_id in retired_ids:
+        del nodes[node_id]
+    for node in nodes.values():
+        node.dependents.clear()
+    _compute_dependents(nodes)
+    order, cycle = _topo_sort(nodes)
+    change_dirs = {
+        f"docs/changes/{node.path.parent.name}/"
+        for node in result.nodes.values()
+        if node.kind == "change"
+    }
+    roadmap = _roadmap_supersede_text(
+        planned_roadmap_text,
+        needle=f"docs/changes/{retired_folder.name}/",
+        replacement=f"docs/archive/{retired_folder.name}.md",
+        source_status=change.status or "proposed",
+        change_dirs=change_dirs,
+        node_id=change_id,
+    )
+    findings = validate(
+        root,
+        nodes,
+        cycle,
+        settings,
+        roadmap_override=_without_generated_roadmap(roadmap),
+    )
+    transitioned = Resolution(
+        nodes=nodes,
+        findings=findings,
+        topo_order=order,
+        discovery=result.discovery,
+        document_paths=result.document_paths,
+    )
+    return SupersedeProjection(
+        record_document=ProjectedDocument(record_path, record_text),
+        resolution=_projected_resolution(transitioned),
+        roadmap_block=render_block(transitioned),
+        roadmap_text=roadmap,
     )
 
 

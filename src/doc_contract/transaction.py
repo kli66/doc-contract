@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -29,12 +30,13 @@ class InjectedInterruption(TransactionError):
 
 @dataclass(frozen=True, slots=True)
 class Mutation:
-    kind: Literal["write", "move", "create"]
+    kind: Literal["write", "move", "create", "remove"]
     path: str
     destination: str | None
     before_hash: str
     after_hash: str
     content: str | None = None
+    staged: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -44,12 +46,13 @@ class Mutation:
             "before_hash": self.before_hash,
             "after_hash": self.after_hash,
             "content": self.content,
+            "staged": self.staged,
         }
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> Mutation:
         kind = raw.get("kind")
-        if kind not in {"write", "move", "create"}:
+        if kind not in {"write", "move", "create", "remove"}:
             raise TransactionError("journal-invalid: unknown mutation kind")
         return cls(
             kind=kind,
@@ -58,6 +61,7 @@ class Mutation:
             before_hash=required_str(raw, "before_hash"),
             after_hash=required_str(raw, "after_hash"),
             content=optional_str(raw.get("content")),
+            staged=raw.get("staged") is True,
         )
 
 
@@ -84,6 +88,13 @@ def optional_str(value: object) -> str | None:
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+# The hash sentinel for an absent file or tree: the after-state of a completed `remove`
+# mutation and the before-state of a `create` mutation. Non-empty by construction so it
+# survives the `required_str` journal round-trip, and explicit so the absent-state
+# convention is tested rather than an implicit empty string.
+ABSENT_HASH = sha(b"")
 
 
 def file_hash(path: Path) -> str:
@@ -170,6 +181,25 @@ def tracking_mode(root: Path, source: Path) -> TrackingMode:
     return "tracked" if tracked else "untracked"
 
 
+def index_tracks_path(root: Path, relative: str) -> bool:
+    """Return True when the Git index still tracks a path (or any file beneath it).
+
+    This is the resume-consistency probe for a tracked `remove`: `git rm -r` stages the
+    deletion in the same boundary, so a path absent from the working tree but still present
+    in the index is partial/foreign state rather than this transaction's own completed
+    removal.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--full-name", "-z", "--", relative],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        raise TransactionError("tracking-state-unavailable: cannot inspect Git index") from None
+    return bool(result.stdout)
+
+
 def journal_payload(plan: TransactionPlan, completed: Sequence[int]) -> dict[str, object]:
     payload = plan.as_dict()
     payload["completed"] = list(completed)
@@ -225,22 +255,78 @@ def atomic_write(path: Path, content: str) -> None:
 def apply_mutation(root: Path, plan: TransactionPlan, mutation: Mutation) -> None:
     path = root / mutation.path
     if mutation.kind == "create":
-        # Creation mutation: file must not exist, content must be provided
+        # Creation mutation: file must not exist, content must be provided. A staged
+        # creation is recorded in the Git index within the same boundary so tracked-only
+        # discovery sees it immediately, and resume is idempotent.
         if mutation.content is None:
             raise TransactionError("mutation-invalid: create mutation missing content")
+        created = False
         if path.exists():
-            # Resume-idempotent: if the destination already exists and its raw hash
-            # equals after_hash, return (a resumed journal must not report a collision)
             current = file_hash(path)
             if current == mutation.after_hash:
-                return
-            # If it exists with a different hash, raise destination-collision
-            raise TransactionError(f"destination-collision: {mutation.path} already exists")
-        # Verify before_hash is empty (absent) or matches current state
-        current = file_hash_or_absent(path)
-        if current != mutation.before_hash:
-            raise ConcurrentModification(f"concurrent-modification: {mutation.path}")
-        atomic_write(path, mutation.content)
+                created = True
+            else:
+                raise TransactionError(f"destination-collision: {mutation.path} already exists")
+        else:
+            if mutation.before_hash not in ("", ABSENT_HASH):
+                raise ConcurrentModification(f"concurrent-modification: {mutation.path}")
+            atomic_write(path, mutation.content)
+            created = True
+        if created and mutation.staged and plan.tracking == "tracked":
+            try:
+                subprocess.run(
+                    ["git", "-C", str(root), "add", "--", mutation.path],
+                    check=True,
+                    capture_output=True,
+                )
+            except (OSError, subprocess.CalledProcessError):
+                raise TransactionError(
+                    f"git-add-failed: created file {mutation.path} could not be staged"
+                ) from None
+        return
+    if mutation.kind == "remove":
+        # Removal mutation: before_hash guards the source tree; a completed remove matches
+        # by absence (after_hash is ABSENT_HASH). Tracked plans remove through the Git
+        # index so the deletion is staged; untracked plans remove the tree directly.
+        #
+        # Resume idempotence across the applied-but-not-journaled boundary: the journal save
+        # happens after the removal returns, so a crash between `git rm -r`/`shutil.rmtree`
+        # and the save leaves the source absent while the boundary is still unrecorded. An
+        # absent source is therefore already-applied when the absence is consistent with this
+        # transaction having performed it: for an untracked plan absence alone suffices, and
+        # for a tracked plan the Git index must also no longer track the path. An absent path
+        # whose index entry survives is partial/foreign state and keeps failing closed.
+        if not path.exists():
+            if plan.tracking == "tracked" and index_tracks_path(root, mutation.path):
+                raise ConcurrentModification(
+                    f"concurrent-modification: missing source {mutation.path}"
+                )
+            return
+        if tree_hash(path) != mutation.before_hash:
+            raise ConcurrentModification(f"concurrent-modification: source tree {mutation.path}")
+        if plan.tracking == "tracked":
+            try:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "rm",
+                        "-r",
+                        "--force",
+                        "--quiet",
+                        "--",
+                        mutation.path,
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+            except (OSError, subprocess.CalledProcessError):
+                raise TransactionError(
+                    f"git-remove-failed: tracked change {mutation.path} could not be removed"
+                ) from None
+        else:
+            shutil.rmtree(path)
         return
     if mutation.kind == "write":
         current = file_hash(path)
@@ -303,6 +389,8 @@ def _completed_mutation_matches(
             return path.is_file() and file_hash(path) == mutation.after_hash
         if mutation.kind == "write":
             return path.is_file() and file_hash(path) == mutation.after_hash
+        if mutation.kind == "remove":
+            return not path.exists()
         destination = root / (mutation.destination or "")
         return (
             not path.exists()

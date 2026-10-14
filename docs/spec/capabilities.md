@@ -76,6 +76,21 @@ and repeating the command without a package change does not rewrite files.
 
 Plan and apply a hash-guarded, resumable change landing. The default plan is a compact, deterministic scope review: it identifies the source, archive, tracking mode, provisional nodes, warning count, write/move totals, and every ordered mutation path without printing document content or transaction hashes. `--diff` appends the planner's complete patch to the same summary for line-level review; it changes presentation only. A dry run prints the value-free preflight warning details because no post-mutation warning report follows. Landing journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. New private journals retain the complete diff across resume; older journals remain resumable and report that the historical diff is unavailable when `--diff` is requested. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`, and the outcome reports baseline, new, and resolved warning counts. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op. The private journal representation is not a public JSON output contract.
 
+### `supersede`
+
+Retire a never-accepted `proposed` change into a frozen lineage record in one hash-guarded,
+resumable, dry-runnable transaction. `--reason` is required and is recorded verbatim in the record
+body; it never appears in CLI output. The transition removes the active `docs/changes/<name>/` tree,
+retargets its roadmap prose line to `docs/archive/<name>.md` with `(superseded)`, regenerates the
+generated DAG, and creates the frozen record last (staged in the Git index for tracked plans) —
+removal first, record creation last, so every interruption boundary is resolvable or fails closed.
+It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, and refuses while any active
+node still `depends_on` the retired id. `--dry-run` prints a value-free plan summary and mutates
+nothing; `--include-untracked` governs provisional work. A `roadmap-line-dangling` ERROR blocks the
+manual `git rm` path that this verb replaces. The record carries `persistence: frozen`, a strict
+`self_hash`, and an inert `status: superseded` scalar that no resolver path consumes as a change
+status.
+
 ### `reflect`
 
 Reflect on project-scoped evidence and optionally author a remediation proposal. The command runs configured source adapters to collect normalized evidence records, optionally runs a configured analyzer for semantic synthesis, and produces a versioned reflection report. Evidence collection and analysis are external subprocesses that are never imported into the resolver; the runtime remains stdlib-only.
@@ -88,14 +103,15 @@ Absence of a `[reflection]` table in `.doc-contract.toml` exits 2 with `reflecti
 
 ## Lifecycle diagnostics
 
-`accept`, `begin`, both mechanical reconciliation phases, and `land` classify the selected change
-before whole-repository preflight through one lifecycle interface. Text and schema-1 JSON preserve
-the same code, message, and nullable next command.
+`accept`, `begin`, `supersede`, both mechanical reconciliation phases, and `land` classify the
+selected change before whole-repository preflight through one lifecycle interface. Text and
+schema-1 JSON preserve the same code, message, and nullable next command.
 
 | Code | Condition | Next command |
 | --- | --- | --- |
 | `change-proposed-unaccepted` | status is `proposed` but the action requires acceptance or execution | `doc-contract accept CHANGE --dry-run` |
 | `change-accepted-not-started` | status is `accepted` but the action requires `in-progress` | `doc-contract begin CHANGE --dry-run` |
+| `change-not-proposed` | `supersede` requested a change whose status is `accepted` or `in-progress` | none |
 | `change-blocked` | status is `blocked` | none |
 | `change-already-landed` | valid archive lineage matches the normalized ID or archive path | none |
 | `change-untracked-excluded` | the selected candidate is excluded by tracked-only discovery | replay the same normalized command with `--include-untracked` |
@@ -112,9 +128,10 @@ content, gate text, environment values, or subprocess output. Repeated `land` em
 
 The supported lifecycle is author → explicit user/reviewer acceptance → `accept` → mechanical then
 semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →
-`land`. Mechanical readiness is evidence only: it never accepts work, judges meaning or task
-completion, repairs drift, or authorizes mutation. Blocked changes remain under their existing
-manual semantic process.
+`land`. A never-accepted `proposed` change retires through `supersede` with a required `--reason`;
+`land` stays `in-progress`-only. Mechanical readiness is evidence only: it never accepts work,
+judges meaning or task completion, repairs drift, or authorizes mutation. Blocked changes remain
+under their existing manual semantic process.
 
 ## Verification matrix
 

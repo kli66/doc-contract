@@ -122,6 +122,8 @@ the durable home for open work; ADRs + `docs/roadmap.md` are the source of truth
    the implementation or durable documents satisfy intent.
 3. On land, `git mv docs/changes/<name>/` → `docs/changes/archive/<date>-<name>/`; capture durable
    findings into ADRs / `docs/spec/` / project memory first, so the archived folder is lineage.
+   A never-accepted proposal retires through `doc-contract supersede <change> --reason <text>`
+   instead of `land`; never `git rm` it by hand.
 
 **Dependency-chain rule.** Every change declares its **upstream dependencies** (`depends_on`, *one
 direction only* — dependents are computed) and the **files it owns**, in YAML front-matter on its
@@ -172,6 +174,9 @@ semantic entry reconciliation → `begin` → work → mechanical then semantic 
 <folder> --dry-run`; add `--diff` when line-level review of the complete patch is needed, then run the
 reviewed command without `--dry-run`. The flag changes presentation only and does not weaken or
 strengthen the transaction boundary.
+A never-accepted `proposed` change retires through `doc-contract supersede <change> --reason <text>`
+instead; `land` stays `in-progress`-only, and `check` reports a `roadmap-line-dangling` error when a
+folder vanishes without a lineage record.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns
 the status, roadmap, fingerprint, journal, and archive boundaries.

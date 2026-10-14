@@ -11,7 +11,7 @@ from typing import Sequence, cast
 
 from . import __version__
 from .config import ConfigError, Settings, load_settings, resolve_repo_root
-from .landing import LandingError, LandingPlan, execute_landing
+from .landing import LandingError, LandingPlan, execute_landing, execute_supersede
 from .lifecycle import (
     LifecycleError,
     LifecyclePlan,
@@ -32,7 +32,7 @@ from .transaction import TransactionError
 from .verification import VerificationPolicy, verify
 
 COMMANDS = frozenset(
-    {"check", "update", "stamp", "sync", "accept", "begin", "reconcile", "land", "reflect"}
+    {"check", "update", "stamp", "sync", "accept", "begin", "reconcile", "land", "reflect", "supersede"}
 )
 
 
@@ -83,6 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
     land.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
     land.add_argument("--diff", action="store_true", help="append the complete content patch")
     land.add_argument("--include-untracked", action="store_true")
+    supersede = subparsers.add_parser(
+        "supersede", parents=[common], help="retire a never-accepted proposed change"
+    )
+    supersede.add_argument("change_ref", help="change ID or repository-relative change folder")
+    supersede.add_argument(
+        "--reason",
+        required=True,
+        help="supersession rationale recorded in the frozen lineage record",
+    )
+    supersede.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+    supersede.add_argument("--include-untracked", action="store_true")
     for name, help_text in (("accept", "record explicit acceptance"), ("begin", "start work on an accepted change")):
         transition = subparsers.add_parser(name, parents=[common], help=help_text)
         transition.add_argument("change_ref", help="change ID or repository-relative change folder")
@@ -284,6 +295,79 @@ def _land(
     return 0
 
 
+def _print_supersede_plan(plan: LandingPlan) -> None:
+    remove_count = sum(mutation.kind == "remove" for mutation in plan.mutations)
+    write_count = sum(mutation.kind == "write" for mutation in plan.mutations)
+    create_count = sum(mutation.kind == "create" for mutation in plan.mutations)
+    print(f"supersede plan: {plan.change_id}")
+    print(f"source: {plan.source}")
+    print(f"record: {plan.archive}")
+    print(f"tracking: {plan.tracking}")
+    print(f"provisional nodes: {len(plan.provisional_nodes)}")
+    if plan.provisional_nodes:
+        for node_id, path in plan.provisional_nodes:
+            print(f"  + {node_id}: {path}")
+    print(
+        f"mutations: {len(plan.mutations)} total; {remove_count} remove(s), "
+        f"{write_count} write(s), {create_count} create(s)"
+    )
+    for mutation in plan.mutations:
+        print(f"  {mutation.kind} {mutation.path}")
+    print(f"preflight warnings: {len(plan.baseline_warnings)}")
+
+
+def _supersede(
+    context: Context,
+    change_ref: str,
+    *,
+    reason: str,
+    dry_run: bool,
+    include_untracked: bool,
+) -> int:
+    try:
+        outcome = execute_supersede(
+            context.root,
+            context.settings,
+            change_ref,
+            reason=reason,
+            dry_run=dry_run,
+            include_untracked=include_untracked,
+            on_plan=_print_supersede_plan,
+        )
+    except LifecycleError as exc:
+        diagnostic = exc.diagnostic
+        print(f"ERROR: [{diagnostic.code}] {diagnostic.message}", file=sys.stderr)
+        if diagnostic.next_command is not None:
+            print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
+        return 1
+    except TransactionError as exc:
+        error_name = "TransactionError" if type(exc) is LandingError else type(exc).__name__
+        print(f"ERROR: [{error_name}] {exc}", file=sys.stderr)
+        return 1
+    if dry_run:
+        for finding in outcome.plan.baseline_warnings if outcome.plan is not None else ():
+            print(f"WARN BASELINE: [{finding.code}] {finding.message}")
+        print("dry-run; no mutations")
+        return 0
+    _print_findings(
+        [finding for finding in outcome.final_findings if finding.level == "ERROR"]
+    )
+    for finding in outcome.warning_report.baseline:
+        print(f"WARN BASELINE: [{finding.code}] {finding.message}")
+    for finding in outcome.warning_report.introduced:
+        print(f"WARN NEW: [{finding.code}] {finding.message}")
+    print(
+        f"warnings: {len(outcome.warning_report.baseline)} baseline, "
+        f"{len(outcome.warning_report.introduced)} new, "
+        f"{len(outcome.warning_report.resolved)} resolved"
+    )
+    if any(finding.level == "ERROR" for finding in outcome.final_findings):
+        print("supersede applied but final validation failed; journal retained", file=sys.stderr)
+        return 1
+    print(f"superseded {outcome.plan.change_id if outcome.plan else change_ref}; {outcome.capability_status}")
+    return 0
+
+
 def _print_lifecycle_plan(plan: LifecyclePlan) -> None:
     if plan.provisional_nodes:
         print("untracked discovery preview (no mutation yet):")
@@ -451,6 +535,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.change_ref,
             dry_run=args.dry_run,
             include_diff=args.diff,
+            include_untracked=args.include_untracked,
+        )
+    if args.command == "supersede":
+        return _supersede(
+            context,
+            args.change_ref,
+            reason=args.reason,
+            dry_run=args.dry_run,
             include_untracked=args.include_untracked,
         )
     if args.command == "accept":
