@@ -1,7 +1,7 @@
 ---
 id: actionable-preflight-diagnostics
 persistence: ephemeral
-status: proposed
+status: landed
 track: remediation
 depends_on:
   - mechanical-reconciliation
@@ -14,10 +14,14 @@ files_owned:
   - tests/test_cli.py
   - docs/spec/capabilities.md
   - docs/roadmap.md
+accepted_at: 2026-10-14
+started_at: 2026-10-14
+landed_at: 2026-10-14
+archive_path: docs/changes/archive/2026-10-14-actionable-preflight-diagnostics
 ---
 # Make `preflight-invalid` diagnostics name the offending node and fix
 
-Status: Proposed (not accepted) · Proposed 2026-10-14
+Status: Landed · 2026-10-14
 
 **Upstream dependencies:** `mechanical-reconciliation` is landed and owns the read-only
 `ReconciliationReport`, `ScopedFinding`, `render_text`, and `reconcile_mechanical` surface this
@@ -150,25 +154,37 @@ transaction boundary is removed or renamed.
 
 ## Tasks
 
-1. Add regression tests in `tests/test_reconciliation.py` covering: `render_text()` includes
+1. [x] Add regression tests in `tests/test_reconciliation.py` covering: `render_text()` includes
    `subjects` for a scoped finding; repository-scope warnings are printed individually, not collapsed;
    the synthetic `preflight-invalid` finding no longer renders the code twice; and a monkeypatched
    `resolve` that raises `ValueError` yields a finding whose message preserves the real error text.
-2. Add regression tests in `tests/test_cli.py` covering: `land` and `supersede` print
+2. [x] Add regression tests in `tests/test_cli.py` covering: `land` and `supersede` print
    `exc.findings` with their subjects and use the stable `exc.code` for a `LandingError`, while a
    non-landing `TransactionError` still reports its own type name.
-3. Implement the `reconciliation.py` renderer and error-branch changes from **What changes**; keep
+3. [x] Implement the `reconciliation.py` renderer and error-branch changes from **What changes**; keep
    the JSON `as_dict()` output (already complete) byte-for-byte unchanged.
-4. Implement the shared `cli.py` failure-print helper and route both `_land` and `_supersede`
+4. [x] Implement the shared `cli.py` failure-print helper and route both `_land` and `_supersede`
    through it, so the `[TransactionError]` relabel and the dropped findings are fixed in one place;
    keep `LifecycleError` handling and all success-path output unchanged.
-5. Update `docs/spec/capabilities.md` prose for `reconcile`, `land`, and `supersede` to reflect the
+5. [x] Update `docs/spec/capabilities.md` prose for `reconcile`, `land`, and `supersede` to reflect the
    named-node diagnostics. `scripts/test_capabilities_coverage.py` only asserts the command headings
    exist, so this is a prose-accuracy update rather than a tripwire gate.
-6. `docs/roadmap.md`: add the Remediation line, then regenerate the DAG with
-   `doc-contract update --repo-root .`.
-7. On land: archive this folder per the contract and confirm the declared new test edits clear with
-   no `owned-file-missing` baseline delta (all owned files already exist).
+6. [x] `docs/roadmap.md`: the Remediation line already existed; the DAG is current, so
+   `doc-contract update --repo-root .` was a no-op and the span/line needed no regeneration.
+7. [x] On land: this folder is archived per the contract; `git status` and the resolver gate confirm
+   all owned files exist, so no `owned-file-missing` warning names any declared path.
+
+**Exit notes (2026-10-14).** All three defects named under **Why** are corrected in text and error
+reporting, and the full suite moved from 303 to 313 tests with ruff and the offline resolver gate
+green. Two deliberate descopes, both recorded rather than silently absorbed. First, the render-side
+suppression of the redundant synthetic line is implemented in `render_text()` and not by dropping the
+finding from the report, because Task 3 and **Verify** freeze the JSON output; the code prefix is
+stripped for display only. Second, the bounded re-observation that could name the offending node for
+a malformed unrelated document was authorized but not implemented: `resolver.discover` raises on the
+same document and returns no partial result, so a single re-call cannot identify the offender. The
+offender is therefore named for the duplicate-node-id and `OSError` families, and a parse failure
+whose exception carries no identity is attributed to no node — which is what the shipped
+`docs/spec/capabilities.md` prose states, so no durable surface overclaims it.
 
 ## Verify
 

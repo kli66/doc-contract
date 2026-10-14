@@ -15,7 +15,7 @@ import doc_contract.cli as cli_runtime
 import doc_contract.sync as sync_runtime
 from doc_contract.cli import COMMANDS, main
 from doc_contract.config import load_settings
-from doc_contract.resolver import fingerprint, resolve
+from doc_contract.resolver import Finding, fingerprint, resolve
 from doc_contract.transaction import TransactionError
 
 
@@ -681,7 +681,7 @@ def test_capability_surface_is_explicit() -> None:
     }
 
 
-def test_land_cli_preserves_transaction_error_labels(
+def test_land_cli_reports_stable_code_and_preserves_transaction_type_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = _repo(tmp_path / "repo")
@@ -703,7 +703,7 @@ def test_land_cli_preserves_transaction_error_labels(
 
     monkeypatch.setattr(cli_runtime, "execute_landing", fail_with_landing_error)
     assert main(["land", "example", "--repo-root", str(repo)]) == 1
-    assert capsys.readouterr().err == "ERROR: [TransactionError] destination-collision: test\n"
+    assert capsys.readouterr().err == "ERROR: [destination-collision] test\n"
 
     class CustomLandingError(cli_runtime.LandingError):
         pass
@@ -713,9 +713,72 @@ def test_land_cli_preserves_transaction_error_labels(
 
     monkeypatch.setattr(cli_runtime, "execute_landing", fail_with_custom_landing_error)
     assert main(["land", "example", "--repo-root", str(repo)]) == 1
-    assert capsys.readouterr().err == (
-        "ERROR: [CustomLandingError] destination-collision: custom\n"
+    assert capsys.readouterr().err == "ERROR: [destination-collision] custom\n"
+
+
+def test_land_cli_prints_findings_with_subjects_under_stable_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path / "repo")
+
+    def fail_with_preflight(*_args: object, **_kwargs: object) -> None:
+        raise cli_runtime.LandingError(
+            "preflight-invalid: planned repository state fails validation",
+            code="preflight-invalid",
+            findings=(
+                Finding(
+                    "ERROR",
+                    "unknown-dependency",
+                    "unknown dependency 'missing'",
+                    ("example",),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(cli_runtime, "execute_landing", fail_with_preflight)
+    assert main(["land", "example", "--repo-root", str(repo)]) == 1
+    err = capsys.readouterr().err
+    assert "ERROR: [preflight-invalid] planned repository state fails validation\n" in err
+    assert (
+        "  ERROR: [unknown-dependency] unknown dependency 'missing'"
+        " (subjects: example)\n"
+    ) in err
+    assert "[TransactionError]" not in err
+
+
+def test_supersede_cli_prints_findings_with_subjects_under_stable_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path / "repo")
+
+    def fail_with_preflight(*_args: object, **_kwargs: object) -> None:
+        raise cli_runtime.LandingError(
+            "preflight-invalid: planned repository state fails validation",
+            code="preflight-invalid",
+            findings=(
+                Finding(
+                    "ERROR",
+                    "unknown-dependency",
+                    "unknown dependency 'missing'",
+                    ("example",),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(cli_runtime, "execute_supersede", fail_with_preflight)
+    assert (
+        main(
+            ["supersede", "example", "--reason", "r", "--repo-root", str(repo)]
+        )
+        == 1
     )
+    err = capsys.readouterr().err
+    assert "ERROR: [preflight-invalid] planned repository state fails validation\n" in err
+    assert (
+        "  ERROR: [unknown-dependency] unknown dependency 'missing'"
+        " (subjects: example)\n"
+    ) in err
+    assert "[TransactionError]" not in err
 
 
 def _lifecycle_repo(

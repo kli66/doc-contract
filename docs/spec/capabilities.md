@@ -60,7 +60,13 @@ Entry reuses the `begin` planner exactly once; exit reuses the landing planner e
 schema-1 JSON and compact text formats expose only selected identity/status, scoped structured
 findings, content-free mutation paths, provisional nodes, tracking/archive metadata, and the next
 lifecycle command. They never expose mutation content, unified diffs, capability arguments/output,
-secret values, or arbitrary `gated_on` text. A blocked change reports only whether that key is
+secret values, or arbitrary `gated_on` text. Text findings name their offending node ids in a
+trailing `subjects: …` suffix, repository-scope warnings are printed individually instead of being
+collapsed into a count, and a code-prefixed restatement is suppressed for display when another
+ERROR-level finding already carries the detail. A repository preflight failure surfaces the
+value-free real error kind (node ids, paths, and error names only) instead of a generic placeholder;
+a parse failure whose exception carries no offender identity is not attributed to any node. A
+blocked change reports only whether that key is
 present. Exit code `0` means mechanically ready, `1` means deterministic blockers remain, and `2`
 means CLI or configuration failure.
 
@@ -74,7 +80,7 @@ and repeating the command without a package change does not rewrite files.
 
 ### `land`
 
-Plan and apply a hash-guarded, resumable change landing. The default plan is a compact, deterministic scope review: it identifies the source, archive, tracking mode, provisional nodes, warning count, write/move totals, and every ordered mutation path without printing document content or transaction hashes. `--diff` appends the planner's complete patch to the same summary for line-level review; it changes presentation only. A dry run prints the value-free preflight warning details because no post-mutation warning report follows. Landing journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. New private journals retain the complete diff across resume; older journals remain resumable and report that the historical diff is unavailable when `--diff` is requested. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`, and the outcome reports baseline, new, and resolved warning counts. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op. The private journal representation is not a public JSON output contract.
+Plan and apply a hash-guarded, resumable change landing. The default plan is a compact, deterministic scope review: it identifies the source, archive, tracking mode, provisional nodes, warning count, write/move totals, and every ordered mutation path without printing document content or transaction hashes. `--diff` appends the planner's complete patch to the same summary for line-level review; it changes presentation only. A dry run prints the value-free preflight warning details because no post-mutation warning report follows. Landing journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. New private journals retain the complete diff across resume; older journals remain resumable and report that the historical diff is unavailable when `--diff` is requested. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`, and the outcome reports baseline, new, and resolved warning counts. A landing blocked by a `LandingError` reports the failure under its stable code (never relabelled as a transaction type) and prints each attached resolver finding with its code, message, and node-id subjects. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op. The private journal representation is not a public JSON output contract.
 
 ### `supersede`
 
@@ -85,7 +91,9 @@ retargets its roadmap prose line to `docs/archive/<name>.md` with `(superseded)`
 generated DAG, and creates the frozen record last (staged in the Git index for tracked plans) —
 removal first, record creation last, so every interruption boundary is resolvable or fails closed.
 It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, and refuses while any active
-node still `depends_on` the retired id. `--dry-run` prints a value-free plan summary and mutates
+node still `depends_on` the retired id; a preflight-blocking `LandingError` is reported under its
+stable code with each attached resolver finding's code, message, and node-id subjects, never
+relabelled as a transaction type. `--dry-run` prints a value-free plan summary and mutates
 nothing; `--include-untracked` governs provisional work. A `roadmap-line-dangling` ERROR blocks the
 manual `git rm` path that this verb replaces. The record carries `persistence: frozen`, a strict
 `self_hash`, and an inert `status: superseded` scalar that no resolver path consumes as a change

@@ -12,9 +12,15 @@ from pathlib import Path
 import pytest
 
 import doc_contract.reconciliation as reconciliation_runtime
-from doc_contract.landing import plan_landing
+from doc_contract.landing import LandingError, plan_landing
 from doc_contract.lifecycle import TransitionAction, plan_transition
-from doc_contract.reconciliation import reconcile_mechanical
+from doc_contract.reconciliation import (
+    ReconciliationManifest,
+    ReconciliationReport,
+    ScopedFinding,
+    _rendered_finding_lines,
+    reconcile_mechanical,
+)
 from doc_contract.resolver import Finding, parse_front_matter
 from test_landing import _repo, _settings, _write
 
@@ -530,7 +536,9 @@ def test_archive_collision_and_partial_tracking_are_typed_blockers(tmp_path: Pat
     assert "partial-tracking" in {finding.code for finding in partial.findings}
 
 
-def test_unrelated_warning_is_compacted_in_text_but_retained_in_json(tmp_path: Path) -> None:
+def test_unrelated_warning_is_rendered_individually_and_retained_in_json(
+    tmp_path: Path,
+) -> None:
     root = _repo(tmp_path)
     _write(
         root,
@@ -555,9 +563,281 @@ def test_unrelated_warning_is_compacted_in_text_but_retained_in_json(tmp_path: P
     text = report.render_text()
     payload = json.dumps(report.as_dict(), sort_keys=True)
 
-    assert "repository warnings: " in text
-    assert "src/unrelated.py" not in text
+    assert "WARN repository: [owned-file-missing]" in text
+    assert "src/unrelated.py" in text
+    assert "repository warnings: " not in text
     assert "src/unrelated.py" in payload
+
+
+def test_render_text_includes_subjects_for_scoped_finding() -> None:
+    report = ReconciliationReport(
+        phase="exit",
+        ready=False,
+        change_id="fix-b",
+        change_path="docs/changes/fix-b",
+        change_status="in-progress",
+        next_command=None,
+        findings=(
+            ScopedFinding(
+                "ERROR",
+                "ownership-overlap",
+                "files owned by multiple active changes",
+                ("fix-b", "fix-a"),
+                "change",
+            ),
+        ),
+        manifest=ReconciliationManifest(),
+    )
+
+    text = report.render_text()
+
+    assert (
+        "ERROR change: [ownership-overlap] files owned by multiple active changes"
+        " (subjects: fix-b, fix-a)\n"
+    ) in text
+
+
+def test_rendered_finding_lines_suppress_restatement_strip_prefix_and_dedupe() -> None:
+    synthetic = ScopedFinding(
+        "ERROR",
+        "preflight-invalid",
+        "preflight-invalid: planned repository state fails validation",
+        ("transactional",),
+        "change",
+    )
+    real = ScopedFinding(
+        "ERROR",
+        "unknown-dependency",
+        "unknown dependency 'missing'",
+        ("transactional",),
+        "change",
+    )
+
+    # With another ERROR-level finding, the code-prefixed restatement is suppressed.
+    assert _rendered_finding_lines((real, synthetic)) == [
+        "ERROR change: [unknown-dependency] unknown dependency 'missing'"
+        " (subjects: transactional)"
+    ]
+
+    # Without another ERROR-level finding, the restatement renders with its code prefix
+    # stripped for display, so the code appears exactly once.
+    assert _rendered_finding_lines((synthetic,)) == [
+        "ERROR change: [preflight-invalid] planned repository state fails validation"
+        " (subjects: transactional)"
+    ]
+
+    # Identical rendered lines are never emitted twice.
+    duplicate = ScopedFinding(
+        "ERROR",
+        "unknown-dependency",
+        "unknown dependency 'missing'",
+        ("transactional",),
+        "change",
+    )
+    assert _rendered_finding_lines((real, duplicate)) == [
+        "ERROR change: [unknown-dependency] unknown dependency 'missing'"
+        " (subjects: transactional)"
+    ]
+
+
+def _exit_reconciliation_with_landing_error(
+    root: Path,
+    exc: LandingError,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ReconciliationReport:
+    def fail_with_landing_error(*_args: object, **_kwargs: object) -> None:
+        raise exc
+
+    monkeypatch.setattr(reconciliation_runtime, "plan_landing", fail_with_landing_error)
+    return reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="exit",
+        include_untracked=True,
+    )
+
+
+def test_landing_preflight_restatement_suppressed_when_findings_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    exc = LandingError(
+        "preflight-invalid: planned repository state fails validation",
+        code="preflight-invalid",
+        findings=(
+            Finding(
+                "ERROR",
+                "unknown-dependency",
+                "unknown dependency 'missing'",
+                ("transactional",),
+            ),
+        ),
+    )
+
+    report = _exit_reconciliation_with_landing_error(root, exc, monkeypatch)
+    text = report.render_text()
+    payload = json.dumps(report.as_dict(), sort_keys=True)
+
+    assert not report.ready
+    assert (
+        "ERROR change: [unknown-dependency] unknown dependency 'missing'"
+        " (subjects: transactional)\n"
+    ) in text
+    assert "[preflight-invalid]" not in text
+    assert "preflight-invalid: planned repository state fails validation" not in text
+    findings = [finding.as_dict() for finding in report.findings]
+    codes = [finding["code"] for finding in findings]
+    assert codes.count("unknown-dependency") == 1
+    assert codes.count("preflight-invalid") == 1
+    synthetic = next(
+        finding for finding in findings if finding["code"] == "preflight-invalid"
+    )
+    assert synthetic == {
+        "level": "ERROR",
+        "code": "preflight-invalid",
+        "message": "preflight-invalid: planned repository state fails validation",
+        "subjects": ["transactional"],
+        "scope": "change",
+    }
+    assert "preflight-invalid: planned repository state fails validation" in payload
+
+
+def test_landing_preflight_restatement_rendered_once_without_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    exc = LandingError(
+        "preflight-invalid: planned repository state fails validation",
+        code="preflight-invalid",
+    )
+
+    report = _exit_reconciliation_with_landing_error(root, exc, monkeypatch)
+    text = report.render_text()
+    payload = json.dumps(report.as_dict(), sort_keys=True)
+
+    assert "[preflight-invalid] planned repository state fails validation" in text
+    assert "[preflight-invalid] preflight-invalid:" not in text
+    assert text.count("[preflight-invalid]") == 1
+    synthetic = [
+        finding
+        for finding in report.findings
+        if finding.code == "preflight-invalid"
+    ]
+    assert len(synthetic) == 1
+    assert synthetic[0].message == "preflight-invalid: planned repository state fails validation"
+    assert "preflight-invalid: planned repository state fails validation" in payload
+
+
+def _resolve_raising(error: Exception, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_resolve(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(reconciliation_runtime, "resolve", failing_resolve)
+
+
+def test_parse_error_value_error_is_value_free_and_unattributable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    _resolve_raising(
+        ValueError("unexpected indentation at top level: 'PRIVATE-VALUE-MARKER'"),
+        monkeypatch,
+    )
+
+    report = reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="exit",
+        include_untracked=True,
+    )
+    text = report.render_text()
+    payload = json.dumps(report.as_dict(), sort_keys=True)
+
+    assert not report.ready
+    finding = next(item for item in report.findings if item.code == "preflight-invalid")
+    assert finding.message == "unexpected indentation at top level"
+    assert finding.subjects == ()
+    assert finding.scope == "repository"
+    assert "repository preflight failed" not in text
+    assert "unexpected indentation at top level" in text
+    assert "PRIVATE-VALUE-MARKER" not in text
+    assert "PRIVATE-VALUE-MARKER" not in payload
+
+
+def test_duplicate_node_id_error_names_the_offender(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    _resolve_raising(
+        ValueError(
+            "duplicate node id 'duplicated': docs/changes/duplicated/change.md"
+            " vs docs/changes/other/change.md"
+        ),
+        monkeypatch,
+    )
+
+    report = reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="exit",
+        include_untracked=True,
+    )
+
+    finding = next(item for item in report.findings if item.code == "preflight-invalid")
+    assert finding.message == (
+        "duplicate node id 'duplicated': docs/changes/duplicated/change.md"
+        " vs docs/changes/other/change.md"
+    )
+    assert finding.subjects == ("duplicated",)
+
+
+def test_oserror_surfaces_type_name_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    error = FileNotFoundError(2, "No such file or directory")
+    error.filename = "docs/changes/transactional/change.md"
+    _resolve_raising(error, monkeypatch)
+
+    report = reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="exit",
+        include_untracked=True,
+    )
+
+    finding = next(item for item in report.findings if item.code == "preflight-invalid")
+    assert finding.message == (
+        "FileNotFoundError during repository preflight: docs/changes/transactional/change.md"
+    )
+    assert finding.subjects == ()
+
+
+def test_unknown_value_error_gets_class_of_failure_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    _resolve_raising(ValueError("boom PRIVATE-VALUE-MARKER"), monkeypatch)
+
+    report = reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="exit",
+        include_untracked=True,
+    )
+    text = report.render_text()
+    payload = json.dumps(report.as_dict(), sort_keys=True)
+
+    finding = next(item for item in report.findings if item.code == "preflight-invalid")
+    assert finding.message == "unrecognized ValueError during repository preflight"
+    assert finding.subjects == ()
+    assert "PRIVATE-VALUE-MARKER" not in text
+    assert "PRIVATE-VALUE-MARKER" not in payload
 
 
 def test_report_never_runs_configured_capability(tmp_path: Path) -> None:

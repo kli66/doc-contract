@@ -18,7 +18,7 @@ from .lifecycle import (
     TransitionAction,
     execute_transition,
 )
-from .reconciliation import Phase, ReconciliationReport, reconcile_mechanical
+from .reconciliation import Phase, ReconciliationReport, _subjects_suffix, reconcile_mechanical
 from .reflection import (
     ReflectionError,
     ReflectionPlan,
@@ -238,6 +238,29 @@ def _print_plan(plan: LandingPlan, *, include_diff: bool) -> None:
         sys.stdout.write(plan.diff)
 
 
+def _print_transaction_failure(exc: TransactionError) -> None:
+    """Shared land/supersede transaction-failure printer. Prints the stable code
+    (exc.code for a LandingError, otherwise the exception type name), the exception text
+    with one leading "code: " prefix stripped for display so the code never appears twice
+    on one line, then each exc.findings entry's code, message, and subjects. Prints no
+    document content or hashes; LifecycleError handling and success output are untouched."""
+    landing = isinstance(exc, LandingError)
+    code = exc.code if landing else type(exc).__name__
+    message = str(exc)
+    if landing:
+        prefix = f"{exc.code}: "
+        if message.startswith(prefix):
+            message = message[len(prefix) :]
+    print(f"ERROR: [{code}] {message}", file=sys.stderr)
+    if landing:
+        for finding in exc.findings:
+            print(
+                f"  {finding.level}: [{finding.code}] {finding.message}"
+                f"{_subjects_suffix(finding.subjects)}",
+                file=sys.stderr,
+            )
+
+
 def _land(
     context: Context,
     change_ref: str,
@@ -262,8 +285,7 @@ def _land(
             print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
         return 1
     except TransactionError as exc:
-        error_name = "TransactionError" if type(exc) is LandingError else type(exc).__name__
-        print(f"ERROR: [{error_name}] {exc}", file=sys.stderr)
+        _print_transaction_failure(exc)
         return 1
     if outcome.already_landed:
         diagnostic = outcome.diagnostic
@@ -341,8 +363,7 @@ def _supersede(
             print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
         return 1
     except TransactionError as exc:
-        error_name = "TransactionError" if type(exc) is LandingError else type(exc).__name__
-        print(f"ERROR: [{error_name}] {exc}", file=sys.stderr)
+        _print_transaction_failure(exc)
         return 1
     if dry_run:
         for finding in outcome.plan.baseline_warnings if outcome.plan is not None else ():

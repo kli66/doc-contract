@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence
@@ -82,6 +83,36 @@ class ReconciliationManifest:
         }
 
 
+def _subjects_suffix(subjects: Sequence[str]) -> str:
+    return f" (subjects: {', '.join(subjects)})" if subjects else ""
+
+
+def _rendered_finding_lines(findings: Sequence[ScopedFinding]) -> list[str]:
+    """Text-only finding rendering rules. For display only: strip one leading
+    "code: " prefix from a message, suppress a finding whose message restates its
+    own code prefix when the report also contains another ERROR-level finding, and
+    never emit two identical rendered lines. JSON output is unaffected."""
+    error_count = sum(1 for finding in findings if finding.level == "ERROR")
+    lines: list[str] = []
+    seen: set[str] = set()
+    for finding in findings:
+        if finding.level not in ("WARN", "ERROR"):
+            continue
+        restatement = finding.message.startswith(f"{finding.code}: ")
+        other_errors = error_count - (1 if finding.level == "ERROR" else 0)
+        if restatement and other_errors >= 1:
+            continue
+        message = finding.message[len(finding.code) + 2 :] if restatement else finding.message
+        line = (
+            f"{finding.level} {finding.scope}: [{finding.code}] {message}"
+            f"{_subjects_suffix(finding.subjects)}"
+        )
+        if line not in seen:
+            seen.add(line)
+            lines.append(line)
+    return lines
+
+
 @dataclass(frozen=True, slots=True)
 class ReconciliationReport:
     phase: Phase
@@ -123,17 +154,7 @@ class ReconciliationReport:
         ]
         if self.gate_present is not None:
             lines.append(f"gate_present: {'true' if self.gate_present else 'false'}")
-        repository_warnings = 0
-        for finding in self.findings:
-            if finding.level == "WARN" and finding.scope == "repository":
-                repository_warnings += 1
-                continue
-            if finding.level == "WARN" or finding.level == "ERROR":
-                lines.append(
-                    f"{finding.level} {finding.scope}: [{finding.code}] {finding.message}"
-                )
-        if repository_warnings:
-            lines.append(f"repository warnings: {repository_warnings} unrelated warning(s)")
+        lines.extend(_rendered_finding_lines(self.findings))
         manifest = self.manifest
         if manifest.tracking is not None:
             lines.append(f"tracking: {manifest.tracking}")
@@ -164,6 +185,45 @@ def _synthetic(
     change_id: str | None,
 ) -> Finding:
     return Finding(level, code, message, (change_id,) if change_id else ())
+
+
+_DUPLICATE_NODE_ID_RE = re.compile(r"^duplicate node id '(?P<node_id>[^']+)': ")
+# resolver.py parse_front_matter (lines 147-209) embeds repr() payloads of raw document
+# lines and values; only the value-free error kind may be surfaced, never the payload.
+_PARSE_ERROR_KINDS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^unexpected indentation at top level: "), "unexpected indentation at top level"),
+    (re.compile(r"^expected 'key:' line, got "), "expected 'key:' line"),
+    (re.compile(r"^unrecognized block line under "), "unrecognized block line"),
+    (re.compile(r"^block under .* mixes list and map forms$"), "front-matter block mixes list and map forms"),
+    (re.compile(r"^expected list, got mapping: "), "expected list, got mapping"),
+    (re.compile(r"^expected mapping, got "), "expected mapping"),
+    (re.compile(r"^expected scalar, got "), "expected scalar"),
+)
+# resolver.py discover() raises this with a repository-relative Path payload; a path is
+# value-free, so the message may be surfaced verbatim.
+_FRONT_MATTER_WITHOUT_ID_RE = re.compile(
+    r"^change doc has front-matter without an `id`: \S+$"
+)
+
+
+def _value_free_preflight_error(exc: OSError | ValueError) -> tuple[str, tuple[str, ...]]:
+    """Render a resolver preflight failure value-free: node ids, paths, and error kinds
+    only, never document lines or values. Returns (message, subjects); subjects carries
+    node ids only and stays empty when no offender is identifiable."""
+    if isinstance(exc, OSError):
+        location = f": {exc.filename}" if exc.filename else ""
+        return f"{type(exc).__name__} during repository preflight{location}", ()
+    message = str(exc)
+    duplicate = _DUPLICATE_NODE_ID_RE.match(message)
+    if duplicate:
+        # resolver.py:442 carries ids and paths only; surfaced verbatim with the offender id.
+        return message, (duplicate.group("node_id"),)
+    for pattern, kind in _PARSE_ERROR_KINDS:
+        if pattern.match(message):
+            return kind, ()
+    if _FRONT_MATTER_WITHOUT_ID_RE.match(message):
+        return message, ()
+    return f"unrecognized {type(exc).__name__} during repository preflight", ()
 
 
 def _manifest_mutations(mutations: Sequence[Mutation]) -> tuple[ManifestMutation, ...]:
@@ -320,14 +380,13 @@ def reconcile_mechanical(
         )
     try:
         resolution = resolve(root, settings, include_untracked=include_untracked)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
         selection = _Selection(classified.change_id, classified.path, None)
-        finding = _synthetic(
-            "ERROR",
-            "preflight-invalid",
-            "repository preflight failed",
-            classified.change_id,
-        )
+        # subjects stays empty unless the exception itself names an offender node id
+        # (duplicate-node-id family); an unattributable failure must never default to
+        # blaming the selected change.
+        message, subjects = _value_free_preflight_error(exc)
+        finding = Finding("ERROR", "preflight-invalid", message, subjects)
         return ReconciliationReport(
             phase=phase,
             ready=False,

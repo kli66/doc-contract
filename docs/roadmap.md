@@ -8,7 +8,7 @@ persistence: living
 
 - `docs/changes/archive/2026-07-30-concise-landing-output/` (landed) — make `land` print a compact mutation inventory by default and expose the complete diff only through an explicit flag; depends on the landed transactional command
 - `docs/changes/archive/2026-07-30-actionable-lifecycle-diagnostics/` (landed) — give acceptance, start, mechanical reconciliation, and landing one stable value-free lifecycle diagnostic taxonomy; depends on accepted state and mechanical reconciliation
-- `docs/changes/actionable-preflight-diagnostics/` (proposed) — make `preflight-invalid` diagnostics name the offending node and fix instead of repeating a generic code, and surface the real parse error and resolver findings in text/land/supersede output; depends on mechanical-reconciliation and actionable-lifecycle-diagnostics
+- `docs/changes/archive/2026-10-14-actionable-preflight-diagnostics/` (landed) — make `preflight-invalid` diagnostics name the offending node and fix instead of repeating a generic code, and surface the real parse error and resolver findings in text/land/supersede output; depends on mechanical-reconciliation and actionable-lifecycle-diagnostics
 - `docs/changes/optional-project-memory/` (proposed) — make repository artifacts sufficient for every lifecycle phase and keep external project memory optional and explicitly authorized; depends on the landed portable install contract
 - `docs/changes/archive/2026-07-27-reuse-document-discovery-for-secret-scanning/` (landed) — run document discovery once and feed its exact selected path set to both graph validation and value-free secret scanning; depends on the landed secret-handling and discovery changes
 - `docs/changes/archive/2026-07-23-secret-handling-guardrails/` (landed) — scanner and redacted
@@ -60,7 +60,7 @@ persistence: living
 flowchart TD
     accepted_change_state["accepted-change-state (landed)"]
     actionable_lifecycle_diagnostics["actionable-lifecycle-diagnostics (landed)"]
-    actionable_preflight_diagnostics["actionable-preflight-diagnostics (proposed)"]
+    actionable_preflight_diagnostics["actionable-preflight-diagnostics (landed)"]
     always_valid_repository_settings["always-valid-repository-settings (landed)"]
     canonicalize_roadmap_status_transitions["canonicalize-roadmap-status-transitions (landed)"]
     concise_landing_output["concise-landing-output (landed)"]
