@@ -227,8 +227,9 @@ def _value_free_preflight_error(exc: OSError | ValueError) -> tuple[str, tuple[s
 
 
 def _manifest_mutations(mutations: Sequence[Mutation]) -> tuple[ManifestMutation, ...]:
+    # Reuse the shared content-free mutation descriptor from Mutation.as_descriptor()
     return tuple(
-        ManifestMutation(item.kind, item.path, item.destination) for item in mutations
+        ManifestMutation(**mutation.as_descriptor()) for mutation in mutations
     )
 
 

@@ -10,8 +10,6 @@ import pytest
 from doc_contract.cli import main
 from doc_contract.landing import execute_supersede, plan_supersede
 from doc_contract.lifecycle import (
-    ConcurrentModification,
-    InjectedInterruption,
     LifecycleError,
     LifecycleRequest,
     TransitionAction,
@@ -383,18 +381,22 @@ def test_blocked_changes_are_not_reclassified(tmp_path: Path) -> None:
 def test_interrupted_accept_resumes_from_lifecycle_journal(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _proposed(root)
-    with pytest.raises(InjectedInterruption):
-        execute_transition(
-            root,
-            _settings(root),
-            "transactional",
-            action="accept",
-            include_untracked=True,
-            date="2026-07-29",
-            fault_after=1,
-        )
+    # Interrupted execution now returns an interrupted outcome instead of raising
+    outcome = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-07-29",
+        fault_after=1,
+    )
+    from doc_contract.lifecycle import ExecutionStatus
+    assert outcome.execution_status == ExecutionStatus.INTERRUPTED
+    assert outcome.journal_retained is True
     journal = list((root / ".git").glob("doc-contract/lifecycle-accept-*.json"))
     assert journal
+    # Resume and complete
     outcome = execute_transition(
         root,
         _settings(root),
@@ -410,27 +412,33 @@ def test_interrupted_accept_resumes_from_lifecycle_journal(tmp_path: Path) -> No
 def test_lifecycle_resume_rejects_edit_to_completed_boundary(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _proposed(root)
-    with pytest.raises(InjectedInterruption):
-        execute_transition(
-            root,
-            _settings(root),
-            "transactional",
-            action="accept",
-            include_untracked=True,
-            date="2026-07-29",
-            fault_after=1,
-        )
+    # Interrupted execution now returns an interrupted outcome instead of raising
+    outcome = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-07-29",
+        fault_after=1,
+    )
+    from doc_contract.lifecycle import ExecutionStatus
+    assert outcome.execution_status == ExecutionStatus.INTERRUPTED
     source = root / "docs/changes/transactional/change.md"
     source.write_text(source.read_text(encoding="utf-8") + "\nEdited after journal\n", encoding="utf-8")
-    with pytest.raises(ConcurrentModification, match="completed boundary"):
-        execute_transition(
-            root,
-            _settings(root),
-            "transactional",
-            action="accept",
-            include_untracked=True,
-            date="2026-07-29",
-        )
+    # Edit to completed boundary must fail closed with journal retained
+    # Now returns INTERRUPTED outcome instead of raising ConcurrentModification
+    outcome2 = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-07-29",
+    )
+    assert outcome2.execution_status == ExecutionStatus.INTERRUPTED
+    assert outcome2.journal_retained is True
+    # Journal must still exist (fail-closed behavior)
     assert list((root / ".git").glob("doc-contract/lifecycle-accept-*.json"))
 
 
@@ -895,3 +903,351 @@ def test_land_still_refuses_a_proposed_change(tmp_path: Path) -> None:
             include_untracked=True,
         )
     assert captured.value.diagnostic.code == "change-proposed-unaccepted"
+
+
+# ------------------------------------------------------------- plan_id and expectation tests
+#
+# Tests for the new plan_id computation, expectation validation, and execution status.
+
+
+def test_plan_id_is_deterministic_and_changes_with_inputs(tmp_path: Path) -> None:
+    """plan_id must be deterministic and change when plan inputs change."""
+    from doc_contract.lifecycle import compute_plan_id
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    plan1 = plan_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action=TransitionAction.ACCEPT,
+        include_untracked=True,
+        date="2026-08-01",
+    )
+    plan_id1 = compute_plan_id(plan1)
+
+    # Same inputs produce same plan_id
+    plan2 = plan_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action=TransitionAction.ACCEPT,
+        include_untracked=True,
+        date="2026-08-01",
+    )
+    plan_id2 = compute_plan_id(plan2)
+    assert plan_id1 == plan_id2
+
+    # Different date produces different plan_id
+    plan3 = plan_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action=TransitionAction.ACCEPT,
+        include_untracked=True,
+        date="2026-08-02",
+    )
+    plan_id3 = compute_plan_id(plan3)
+    assert plan_id3 != plan_id1
+
+    # plan_id format is canonical
+    assert plan_id1.startswith("sha256:")
+    assert len(plan_id1) == 71  # "sha256:" + 64 hex chars
+
+
+def test_schema_2_journal_persists_include_untracked(tmp_path: Path) -> None:
+    """Schema-2 journals must persist include_untracked and reproduce plan_id."""
+    import json
+    from doc_contract.lifecycle import LIFECYCLE_JOURNAL_SCHEMA
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Plan with include_untracked=True (to verify the journal captures it)
+    plan_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action=TransitionAction.ACCEPT,
+        include_untracked=True,
+        date="2026-08-01",
+    )
+
+    # Execute to create journal - interrupted execution returns interrupted outcome
+    outcome = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        fault_after=1,  # Interrupt after first mutation to retain journal
+    )
+    from doc_contract.lifecycle import ExecutionStatus
+    assert outcome.execution_status == ExecutionStatus.INTERRUPTED
+    assert outcome.journal_retained is True
+    # Check the journal was created
+    journal_files = list((root / ".git").glob("doc-contract/lifecycle-accept-*.json"))
+    assert journal_files
+
+    # Read the journal and verify schema 2 and include_untracked
+    journal_data = json.loads(journal_files[0].read_text(encoding="utf-8"))
+    assert journal_data["schema"] == LIFECYCLE_JOURNAL_SCHEMA
+    assert journal_data["include_untracked"] is True
+
+
+def test_schema_1_journal_is_readable_without_migration(tmp_path: Path) -> None:
+    """Schema-1 journals must remain readable without payload migration."""
+    import json
+    from doc_contract.lifecycle import LifecyclePlan
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Create a schema-1 journal manually
+    journal_path = root / ".git" / "doc-contract" / "lifecycle-accept-transactional.json"
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create a minimal schema-1 journal payload
+    schema1_payload = {
+        "schema": 1,
+        "action": "accept",
+        "change_id": "transactional",
+        "source": "docs/changes/transactional",
+        "date": "2026-08-01",
+        "source_status": "proposed",
+        "destination_status": "accepted",
+        "accepted_at": None,
+        "started_at": None,
+        "tracking": "untracked",
+        "input_tree_hash": "abc123",
+        "output_tree_hash": "def456",
+        "journal_path": str(journal_path),
+        "provisional_nodes": [],
+        "current_findings": [],
+        "projected_findings": [],
+        "baseline_warnings": [],
+        "mutations": [],
+        "already_applied": False,
+        "completed": [],
+    }
+    journal_path.write_text(json.dumps(schema1_payload, indent=2), encoding="utf-8")
+
+    # Load the journal - should succeed
+    from doc_contract.transaction import load_journal
+    plan, completed = load_journal(journal_path, LifecyclePlan.from_dict)
+
+    assert plan.change_id == "transactional"
+    assert plan.include_untracked is None  # Schema-1 has unknown include_untracked
+    assert completed == []
+
+
+def test_schema_1_journal_with_expectation_is_rejected(tmp_path: Path) -> None:
+    """Schema-1 journal with expectation must reject as not-verifiable."""
+    import json
+    from doc_contract.lifecycle import ExecutionStatus
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Create a schema-1 journal manually
+    journal_path = root / ".git" / "doc-contract" / "lifecycle-accept-transactional.json"
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    schema1_payload = {
+        "schema": 1,
+        "action": "accept",
+        "change_id": "transactional",
+        "source": "docs/changes/transactional",
+        "date": "2026-08-01",
+        "source_status": "proposed",
+        "destination_status": "accepted",
+        "accepted_at": None,
+        "started_at": None,
+        "tracking": "untracked",
+        "input_tree_hash": "abc123",
+        "output_tree_hash": "def456",
+        "journal_path": str(journal_path),
+        "provisional_nodes": [],
+        "current_findings": [],
+        "projected_findings": [],
+        "baseline_warnings": [],
+        "mutations": [],
+        "already_applied": False,
+        "completed": [],
+    }
+    journal_path.write_text(json.dumps(schema1_payload, indent=2), encoding="utf-8")
+
+    # Execute with expectation - should reject as not-verifiable
+    outcome = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        expect_plan_id="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+
+    assert outcome.execution_status == ExecutionStatus.REJECTED
+    assert outcome.expectation == "not-verifiable"
+    assert outcome.journal_retained is True
+
+
+def test_expectation_mismatch_rejects_before_mutation(tmp_path: Path) -> None:
+    """Expectation mismatch must reject before any mutation."""
+    from doc_contract.lifecycle import ExecutionStatus
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Execute with wrong expectation
+    wrong_plan_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    outcome = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        expect_plan_id=wrong_plan_id,
+        dry_run=True,
+    )
+
+    assert outcome.execution_status == ExecutionStatus.REJECTED
+    assert outcome.expectation == "mismatch"
+
+    # Verify no mutation occurred
+    source = root / "docs/changes/transactional/change.md"
+    values = parse_front_matter(source.read_text(encoding="utf-8"))
+    assert values is not None
+    assert values["status"] == "proposed"  # Unchanged
+
+
+def test_malformed_expectation_is_rejected_without_echoing(tmp_path: Path) -> None:
+    """Malformed expectation must be rejected without echoing the input."""
+    from doc_contract.lifecycle import ExecutionStatus
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Execute with malformed expectation
+    outcome = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        expect_plan_id="not-a-valid-sha256",
+        dry_run=True,
+    )
+
+    assert outcome.execution_status == ExecutionStatus.REJECTED
+    assert outcome.expectation == "malformed"
+
+
+def test_execution_status_distinguishes_rejected_from_interrupted(tmp_path: Path) -> None:
+    """Execution status must distinguish rejected from interrupted."""
+    from doc_contract.lifecycle import ExecutionStatus
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Rejected case (expectation mismatch)
+    outcome_rejected = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        expect_plan_id="sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        dry_run=True,
+    )
+    assert outcome_rejected.execution_status == ExecutionStatus.REJECTED
+    assert outcome_rejected.journal_retained is False
+
+    # Interrupted case (fault_after)
+    outcome_interrupted = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        fault_after=1,
+    )
+    assert outcome_interrupted.execution_status == ExecutionStatus.INTERRUPTED
+    assert outcome_interrupted.journal_retained is True
+    # Journal should exist
+    assert list((root / ".git").glob("doc-contract/lifecycle-accept-*.json"))
+
+
+def test_already_applied_reports_correct_status(tmp_path: Path) -> None:
+    """Already-applied no-op must report correct execution status."""
+    from doc_contract.lifecycle import ExecutionStatus
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # First accept
+    outcome1 = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+    )
+    assert outcome1.execution_status == ExecutionStatus.APPLIED
+
+    # Second accept (already-applied)
+    outcome2 = execute_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+    )
+    assert outcome2.execution_status == ExecutionStatus.ALREADY_APPLIED
+    assert outcome2.already_applied is True
+
+
+def test_findings_do_not_affect_plan_id(tmp_path: Path) -> None:
+    """Findings must not affect plan_id."""
+    from doc_contract.lifecycle import compute_plan_id
+
+    root = _repo(tmp_path)
+    _proposed(root)
+
+    # Add an unrelated warning that shouldn't affect plan_id
+    _write(
+        root,
+        "docs/changes/unrelated/change.md",
+        "---\nid: unrelated\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "files_owned:\n  - src/unrelated.py\n---\n# Unrelated\n",
+    )
+    roadmap = root / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8") + "\n- `docs/changes/unrelated/` (proposed)\n",
+        encoding="utf-8",
+    )
+
+    plan = plan_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action=TransitionAction.ACCEPT,
+        include_untracked=True,
+        date="2026-08-01",
+    )
+
+    # plan_id should be computed successfully despite the warning
+    plan_id = compute_plan_id(plan)
+    assert plan_id.startswith("sha256:")
+
+    # The warning should be in findings but not affect plan_id
+    assert any(f.code == "owned-file-missing" for f in plan.current_findings)

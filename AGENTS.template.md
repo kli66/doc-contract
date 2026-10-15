@@ -170,7 +170,32 @@ infer authority. Run
 `doc-contract begin` only after entry reconciliation, and begin refuses proposed, blocked, and
 landed changes. The supported sequence is author → explicit acceptance → `accept` → mechanical then
 semantic entry reconciliation → `begin` → work → mechanical then semantic exit reconciliation →
-`land` → final commit. Landing is completed through a compact scope review with `doc-contract land
+`land` → final commit.
+
+`accept` supports `--format json` for machine-readable output and `--expect-plan-id` for optimistic
+concurrency control. The plan identifier (`plan_id`) is computed from a domain-separated,
+schema-versioned canonical encoding of the public plan plus each mutation's private preimage and
+postimage hashes. A mismatch rejects before any journal creation or mutation. The `plan_id`
+identifies the complete acceptance transaction, including roadmap and dependent metadata; it is
+distinct from the accepted-document identity, which is the exact `change.md` bytes plus their
+SHA-256 digest.
+
+**Already-applied expectation limitation:** When a change is already accepted and no active journal
+exists to prove the original plan, a supplied `--expect-plan-id` cannot be verified. The command
+reports `execution.status: already-applied` and `execution.expectation: not-verifiable`, then exits
+0.
+
+**Path-scoped transfer or staging:** The mutation paths in the plan manifest describe what the
+acceptance invocation will mutate, but they do not guarantee exact transfer or staging when a
+planned path contains pre-existing mixed edits. Path-scoped transfer or staging is exact only from
+an isolated or otherwise owned baseline, or when the caller controls patch transfer or staging.
+
+**Optional checkpoint policy:** A downstream consumer may capture the accepted bytes and digest
+outside the mutable index and proceed through `begin` and implementation without an intermediate
+commit; acceptance remains logically prior to implementation, and the runtime never stages or
+commits Git changes.
+
+Landing is completed through a compact scope review with `doc-contract land
 <folder> --dry-run`; add `--diff` when line-level review of the complete patch is needed, then run the
 reviewed command without `--dry-run`. The flag changes presentation only and does not weaken or
 strengthen the transaction boundary.

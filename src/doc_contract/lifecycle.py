@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as _datetime
 import difflib
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -35,12 +37,22 @@ from .transaction import (
     tracking_mode,
 )
 
-LIFECYCLE_JOURNAL_SCHEMA = 1
+LIFECYCLE_JOURNAL_SCHEMA = 2
 
 
 class TransitionAction(str, Enum):
     ACCEPT = "accept"
     BEGIN = "begin"
+
+
+class ExecutionStatus(str, Enum):
+    """Execution status records the side-effect boundary reached by the current invocation."""
+    NOT_APPLIED = "not-applied"
+    REJECTED = "rejected"
+    APPLIED = "applied"
+    ALREADY_APPLIED = "already-applied"
+    INTERRUPTED = "interrupted"
+    VALIDATION_FAILED = "validation-failed"
 
 
 class LifecycleRequest(str, Enum):
@@ -113,6 +125,7 @@ class LifecyclePlan:
     accepted_at: str | None
     started_at: str | None
     tracking: TrackingMode
+    include_untracked: bool
     mutations: tuple[Mutation, ...]
     diff: str
     input_tree_hash: str
@@ -136,6 +149,7 @@ class LifecyclePlan:
             "accepted_at": self.accepted_at,
             "started_at": self.started_at,
             "tracking": self.tracking,
+            "include_untracked": self.include_untracked,
             "input_tree_hash": self.input_tree_hash,
             "output_tree_hash": self.output_tree_hash,
             "journal_path": self.journal_path,
@@ -149,7 +163,8 @@ class LifecyclePlan:
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> LifecyclePlan:
-        if raw.get("schema") != LIFECYCLE_JOURNAL_SCHEMA:
+        schema = raw.get("schema")
+        if schema not in {1, 2}:
             raise LifecycleError("journal-invalid: unsupported lifecycle schema")
         action = raw.get("action")
         if not isinstance(action, str):
@@ -172,6 +187,15 @@ class LifecyclePlan:
             for item in provisional
         ):
             raise LifecycleError("journal-invalid: provisional_nodes is malformed")
+        # Schema 1 journals do not include include_untracked; schema 2 journals do.
+        # For schema 1, we set include_untracked to None to indicate it's unknown.
+        include_untracked_raw = raw.get("include_untracked")
+        if schema == 1:
+            include_untracked: bool | None = None
+        elif isinstance(include_untracked_raw, bool):
+            include_untracked = include_untracked_raw
+        else:
+            include_untracked = False
         return cls(
             action=parsed_action,
             change_id=_required_str(raw, "change_id"),
@@ -182,6 +206,7 @@ class LifecyclePlan:
             accepted_at=_optional_str(raw.get("accepted_at")),
             started_at=_optional_str(raw.get("started_at")),
             tracking=tracking,
+            include_untracked=include_untracked,
             mutations=tuple(Mutation.from_dict(item) for item in mutations),
             diff="",
             input_tree_hash=_required_str(raw, "input_tree_hash"),
@@ -200,10 +225,96 @@ class LifecycleOutcome:
     plan: LifecyclePlan | None
     already_applied: bool
     final_findings: tuple[Finding, ...] = ()
+    execution_status: ExecutionStatus = ExecutionStatus.APPLIED
+    expectation: str = "not-provided"
+    completed_mutations: int = 0
+    total_mutations: int = 0
+    journal_retained: bool = False
+    diagnostic: LifecycleDiagnostic | None = None
 
     @property
     def already_transitioned(self) -> bool:
         return self.already_applied
+
+
+def compute_plan_id(plan: LifecyclePlan) -> str:
+    """Compute a domain-separated, schema-versioned canonical plan identifier.
+
+    The plan_id is computed from:
+    1. Domain separator: "doc-contract:acceptance-plan:v1"
+    2. Schema version: 1
+    3. Public plan fields (action, change, transition, options, provisional_nodes, mutations)
+    4. Each mutation's private preimage and postimage hashes
+
+    Only the digest is exposed, not the individual hashes or contents.
+    """
+    # Build the public plan projection (reuse the shared projection)
+    public_plan = public_plan_projection(plan)
+
+    # Build the preimage for hashing
+    pieces = []
+    # Domain separator
+    pieces.append("doc-contract:acceptance-plan:v1")
+    # Schema version for the plan identity
+    pieces.append("schema:1")
+    # Canonical JSON of public plan
+    pieces.append(json.dumps(public_plan, sort_keys=True, separators=(',', ':')))
+    # Each mutation's private hashes - use canonical JSON for delimiter-unambiguous encoding
+    for mutation in plan.mutations:
+        mutation_piece = json.dumps(
+            {"path": mutation.path, "before": mutation.before_hash, "after": mutation.after_hash},
+            sort_keys=True,
+            separators=(',', ':')
+        )
+        pieces.append(mutation_piece)
+
+    preimage = "\n".join(pieces)
+    digest = hashlib.sha256(preimage.encode('utf-8')).hexdigest()
+    return f"sha256:{digest}"
+
+
+def public_plan_projection(plan: LifecyclePlan) -> dict[str, object]:
+    """Build the public plan projection for JSON output.
+
+    This exposes only content-free fields: action, change identity, transition,
+    options, provisional nodes, and mutation descriptors (kind/path/destination).
+    """
+    return {
+        "action": plan.action.value,
+        "change": {
+            "id": plan.change_id,
+            "path": plan.source,
+            "tracking": plan.tracking,
+        },
+        "transition": {
+            "date": plan.date,
+            "source_status": plan.source_status,
+            "destination_status": plan.destination_status,
+        },
+        "options": {
+            "include_untracked": plan.include_untracked,
+        },
+        "provisional_nodes": [
+            {"id": node_id, "path": path}
+            for node_id, path in plan.provisional_nodes
+        ],
+        "mutations": [mutation.as_descriptor() for mutation in plan.mutations],
+    }
+
+
+def validate_expected_plan_id(expected: str) -> bool:
+    """Validate that an expected plan_id is in canonical form.
+
+    Must be exactly "sha256:" followed by 64 lowercase hexadecimal characters.
+    """
+    if not isinstance(expected, str):
+        return False
+    if not expected.startswith("sha256:"):
+        return False
+    hex_part = expected[7:]
+    if len(hex_part) != 64:
+        return False
+    return all(c in '0123456789abcdef' for c in hex_part)
 
 
 def _diagnostic(
@@ -616,6 +727,7 @@ def _make_noop_plan(
     source: Path,
     action: TransitionAction,
     date: str,
+    include_untracked: bool = False,
 ) -> LifecyclePlan:
     status = result.nodes[change_id].status or ""
     tracking = tracking_mode(root, source)
@@ -630,6 +742,7 @@ def _make_noop_plan(
         accepted_at=_optional_str(parse_front_matter((source / "change.md").read_text(encoding="utf-8")).get("accepted_at")),
         started_at=_optional_str(parse_front_matter((source / "change.md").read_text(encoding="utf-8")).get("started_at")),
         tracking=tracking,
+        include_untracked=include_untracked,
         mutations=(),
         diff="",
         input_tree_hash=sha(b""),
@@ -680,7 +793,7 @@ def plan_transition(
     destination = "accepted" if action is TransitionAction.ACCEPT else "in-progress"
     if status == destination:
         return _make_noop_plan(
-            root, settings, result, change_id=change_id, source=source, action=action, date=day
+            root, settings, result, change_id=change_id, source=source, action=action, date=day, include_untracked=include_untracked
         )
     expected = "proposed" if action is TransitionAction.ACCEPT else "accepted"
     if status != expected:
@@ -730,6 +843,7 @@ def plan_transition(
         accepted_at=projection.accepted_at,
         started_at=projection.started_at,
         tracking=tracking_mode(root, source),
+        include_untracked=include_untracked,
         mutations=tuple(mutations),
         diff="".join(diff_parts),
         input_tree_hash=_plan_hash(mutations, after=False),
@@ -751,6 +865,7 @@ def execute_transition(
     include_untracked: bool = False,
     date: str | None = None,
     dry_run: bool = False,
+    expect_plan_id: str | None = None,
     on_plan: Callable[[LifecyclePlan], None] | None = None,
     fault_after: int | None = None,
 ) -> LifecycleOutcome:
@@ -774,7 +889,8 @@ def execute_transition(
         include_untracked=include_untracked,
     )
     journal_path = _metadata_path(root, action, selection.change_id)
-    if journal_path.is_file():
+    journal_existed = journal_path.is_file()
+    if journal_existed:
         plan, completed = load_journal(journal_path, LifecyclePlan.from_dict)
     else:
         if result.errors:
@@ -788,12 +904,88 @@ def execute_transition(
             date=date,
         )
         completed = []
+
+    # Validate expectation if provided
+    expectation = "not-provided"
+    if expect_plan_id is not None:
+        expectation = "matched"
+        # Validate the expected plan_id format
+        if not validate_expected_plan_id(expect_plan_id):
+            # Malformed identifier - reject without echoing it
+            return LifecycleOutcome(
+                plan=None,
+                already_applied=False,
+                final_findings=(),
+                execution_status=ExecutionStatus.REJECTED,
+                expectation="malformed",
+                diagnostic=LifecycleDiagnostic(
+                    "accept-plan-id-invalid",
+                    "expected plan identifier is not in canonical form"
+                ),
+            )
+        # Check if this is a schema-1 journal (cannot verify expectation)
+        if journal_existed and plan.include_untracked is None:
+            # Schema-1 journal cannot verify expectation
+            return LifecycleOutcome(
+                plan=plan,
+                already_applied=False,
+                final_findings=(),
+                execution_status=ExecutionStatus.REJECTED,
+                expectation="not-verifiable",
+                completed_mutations=len(completed),
+                total_mutations=len(plan.mutations),
+                journal_retained=True,
+                diagnostic=LifecycleDiagnostic(
+                    "accept-plan-legacy-journal",
+                    "cannot verify expectation against a legacy journal"
+                ),
+            )
+        # When already applied and no active journal exists, we cannot verify expectation
+        # Skip the comparison and report not-verifiable later
+        if not plan.already_applied or journal_existed:
+            # Compute the actual plan_id
+            actual_plan_id = compute_plan_id(plan)
+            if actual_plan_id != expect_plan_id:
+                # Mismatch - reject before any mutation
+                return LifecycleOutcome(
+                    plan=plan,
+                    already_applied=False,
+                    final_findings=(),
+                    execution_status=ExecutionStatus.REJECTED,
+                    expectation="mismatch",
+                    completed_mutations=len(completed),
+                    total_mutations=len(plan.mutations),
+                    journal_retained=journal_existed,
+                    diagnostic=LifecycleDiagnostic(
+                        "accept-plan-mismatch",
+                        "expected plan identifier does not match the computed plan"
+                    ),
+                )
+
     if on_plan is not None:
         on_plan(plan)
     if plan.already_applied:
-        return LifecycleOutcome(plan, True, tuple(result.findings))
+        # Already-applied no-op
+        # When no active journal exists, we cannot verify a supplied expectation
+        # If an expectation was supplied and we have no journal to validate against,
+        # report not-verifiable (not matched)
+        if expect_plan_id is not None and not journal_existed:
+            expectation = "not-verifiable"
+        return LifecycleOutcome(
+            plan=plan,
+            already_applied=True,
+            final_findings=tuple(result.findings),
+            execution_status=ExecutionStatus.ALREADY_APPLIED,
+            expectation=expectation if expect_plan_id is not None else "not-verifiable",
+        )
     if dry_run:
-        return LifecycleOutcome(plan, False, plan.projected_findings)
+        return LifecycleOutcome(
+            plan=plan,
+            already_applied=False,
+            final_findings=plan.projected_findings,
+            execution_status=ExecutionStatus.NOT_APPLIED,
+            expectation=expectation,
+        )
     try:
         execute_mutations(
             root,
@@ -804,18 +996,79 @@ def execute_transition(
             save=save_journal,
         )
     except InjectedInterruption:
-        raise
+        # Interruption after crossing the journal boundary
+        # Reload the journal to get the actual completed mutation count
+        if journal_path.is_file():
+            _, reloaded_completed = load_journal(journal_path, LifecyclePlan.from_dict)
+            completed_count = len(reloaded_completed)
+        else:
+            completed_count = len(completed)
+        return LifecycleOutcome(
+            plan=plan,
+            already_applied=False,
+            final_findings=(),
+            execution_status=ExecutionStatus.INTERRUPTED,
+            expectation=expectation,
+            completed_mutations=completed_count,
+            total_mutations=len(plan.mutations),
+            journal_retained=True,
+            diagnostic=LifecycleDiagnostic(
+                "accept-interrupted",
+                "acceptance transaction interrupted after crossing the journal boundary"
+            ),
+        )
     except TransactionError:
+        # Real transaction error (e.g., ConcurrentModification) after crossing the journal boundary
+        # Check if a journal exists - if so, this is an interruption, not a rejection
+        if journal_path.is_file():
+            # Reload the journal to get the actual completed mutation count
+            _, reloaded_completed = load_journal(journal_path, LifecyclePlan.from_dict)
+            completed_count = len(reloaded_completed)
+            return LifecycleOutcome(
+                plan=plan,
+                already_applied=False,
+                final_findings=(),
+                execution_status=ExecutionStatus.INTERRUPTED,
+                expectation=expectation,
+                completed_mutations=completed_count,
+                total_mutations=len(plan.mutations),
+                journal_retained=True,
+                diagnostic=LifecycleDiagnostic(
+                    "accept-interrupted",
+                    "acceptance transaction interrupted after crossing the journal boundary"
+                ),
+            )
+        # No journal exists - this is a pre-journal failure, re-raise for CLI to handle
         raise
     final = resolve(root, settings, include_untracked=include_untracked)
     if final.errors:
-        return LifecycleOutcome(plan, False, tuple(final.findings))
+        # Validation failed after mutations - journal retained
+        return LifecycleOutcome(
+            plan=plan,
+            already_applied=False,
+            final_findings=tuple(final.findings),
+            execution_status=ExecutionStatus.VALIDATION_FAILED,
+            expectation=expectation,
+            completed_mutations=len(plan.mutations),
+            total_mutations=len(plan.mutations),
+            journal_retained=True,
+        )
     journal_path.unlink(missing_ok=True)
-    return LifecycleOutcome(plan, False, tuple(final.findings))
+    return LifecycleOutcome(
+        plan=plan,
+        already_applied=False,
+        final_findings=tuple(final.findings),
+        execution_status=ExecutionStatus.APPLIED,
+        expectation=expectation,
+        completed_mutations=len(plan.mutations),
+        total_mutations=len(plan.mutations),
+        journal_retained=False,
+    )
 
 
 __all__ = [
     "ConcurrentModification",
+    "ExecutionStatus",
     "InjectedInterruption",
     "LifecycleDiagnostic",
     "LifecycleError",
@@ -825,6 +1078,9 @@ __all__ = [
     "LifecycleSelection",
     "TransitionAction",
     "classify_change",
+    "compute_plan_id",
     "execute_transition",
     "plan_transition",
+    "public_plan_projection",
+    "validate_expected_plan_id",
 ]

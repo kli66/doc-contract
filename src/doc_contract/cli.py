@@ -13,10 +13,16 @@ from . import __version__
 from .config import ConfigError, Settings, load_settings, resolve_repo_root
 from .landing import LandingError, LandingPlan, execute_landing, execute_supersede
 from .lifecycle import (
+    ExecutionStatus,
+    LifecycleDiagnostic,
     LifecycleError,
     LifecyclePlan,
+    LifecycleRequest,
     TransitionAction,
+    classify_change,
+    compute_plan_id,
     execute_transition,
+    public_plan_projection,
 )
 from .reconciliation import Phase, ReconciliationReport, _subjects_suffix, reconcile_mechanical
 from .reflection import (
@@ -28,7 +34,7 @@ from .reflection import (
 )
 from .resolver import Finding, Resolution, resolve, stamp_node, update_roadmap
 from .sync import sync_package
-from .transaction import TransactionError
+from .transaction import TransactionError, git_metadata_path
 from .verification import VerificationPolicy, verify
 
 COMMANDS = frozenset(
@@ -94,11 +100,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     supersede.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
     supersede.add_argument("--include-untracked", action="store_true")
-    for name, help_text in (("accept", "record explicit acceptance"), ("begin", "start work on an accepted change")):
-        transition = subparsers.add_parser(name, parents=[common], help=help_text)
-        transition.add_argument("change_ref", help="change ID or repository-relative change folder")
-        transition.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
-        transition.add_argument("--include-untracked", action="store_true")
+    # accept gets --format and --expect-plan-id; begin does not
+    accept_parser = subparsers.add_parser("accept", parents=[common], help="record explicit acceptance")
+    accept_parser.add_argument("change_ref", help="change ID or repository-relative change folder")
+    accept_parser.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+    accept_parser.add_argument("--include-untracked", action="store_true")
+    accept_parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
+    accept_parser.add_argument("--expect-plan-id", help="expected plan identifier for optimistic concurrency")
+    begin_parser = subparsers.add_parser("begin", parents=[common], help="start work on an accepted change")
+    begin_parser.add_argument("change_ref", help="change ID or repository-relative change folder")
+    begin_parser.add_argument("--dry-run", action="store_true", help="print the plan without mutations")
+    begin_parser.add_argument("--include-untracked", action="store_true")
     reflect = subparsers.add_parser("reflect", parents=[common], help="reflect on project evidence")
     reflect.add_argument("--source", action="append", help="select a specific source adapter")
     reflect.add_argument("--since", help="inclusive date boundary for evidence (YYYY-MM-DD)")
@@ -403,6 +415,124 @@ def _print_lifecycle_plan(plan: LifecyclePlan) -> None:
         print(plan.diff, end="" if plan.diff.endswith("\n") else "\n")
 
 
+def _print_acceptance_json(
+    *,
+    plan: LifecyclePlan | None,
+    execution_status: ExecutionStatus,
+    expectation: str,
+    findings: Sequence[Finding],
+    diagnostic: LifecycleDiagnostic | None,
+    completed_mutations: int = 0,
+    total_mutations: int = 0,
+    journal_retained: bool = False,
+) -> None:
+    """Print exactly one versioned JSON object for acceptance transition."""
+    # Build the JSON output
+    output: dict[str, object] = {
+        "schema_version": 1,
+        "kind": "acceptance-transition",
+    }
+
+    # Plan ID and plan
+    if plan is not None:
+        output["plan_id"] = compute_plan_id(plan)
+        output["plan"] = public_plan_projection(plan)
+    else:
+        output["plan_id"] = None
+        output["plan"] = None
+
+    # Execution
+    execution: dict[str, object] = {
+        "mode": "dry-run" if execution_status == ExecutionStatus.NOT_APPLIED else "apply",
+        "status": execution_status.value,
+        "expectation": expectation,
+        "completed_mutations": completed_mutations,
+        "total_mutations": total_mutations,
+        "journal_retained": journal_retained,
+    }
+    output["execution"] = execution
+
+    # Findings - value-free
+    output["findings"] = [
+        {"level": f.level, "code": f.code, "message": f.message}
+        for f in findings
+    ]
+
+    # Diagnostic
+    if diagnostic is not None:
+        output["diagnostic"] = {
+            "code": diagnostic.code,
+            "message": diagnostic.message,
+        }
+    else:
+        output["diagnostic"] = None
+
+    print(json.dumps(output, sort_keys=True, separators=(',', ':')))
+
+
+def _journal_exists_for_transition(
+    root: Path,
+    settings: Settings,
+    change_ref: str,
+    action: TransitionAction,
+    exc: LifecycleError | TransactionError | None = None,
+) -> bool:
+    """Check if a lifecycle journal exists for this transition.
+
+    Returns True if the journal file exists, False otherwise or if we can't determine the path.
+    """
+    import re
+
+    # Try to get the change_id
+    change_id = None
+
+    # For LifecycleError, try to use the change_id from the exception
+    if isinstance(exc, LifecycleError) and exc.change_id is not None:
+        change_id = exc.change_id
+
+    # If we don't have change_id, try to resolve change_ref
+    if change_id is None:
+        try:
+            request = (
+                LifecycleRequest.ACCEPT
+                if action is TransitionAction.ACCEPT
+                else LifecycleRequest.BEGIN
+            )
+            selection = classify_change(root, settings, change_ref, action=request)
+            change_id = selection.change_id
+        except Exception:
+            pass
+
+    if change_id is None:
+        return False
+
+    # Compute the journal path (same logic as lifecycle._metadata_path)
+    try:
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "-", change_id)
+        journal_path = git_metadata_path(
+            root,
+            f"doc-contract/lifecycle-{action.value}-{safe}.json",
+            operation="error reporting",
+        )
+        return journal_path.is_file()
+    except Exception:
+        return False
+
+
+def _derive_diagnostic_from_transaction_error(exc: TransactionError) -> LifecycleDiagnostic:
+    """Derive a value-free diagnostic from a TransactionError.
+
+    Extracts the code from the exception message (format: "code: message" or just "message").
+    """
+    message = str(exc)
+    # Extract the code from the message (format: "code: message" or just "message")
+    if ": " in message:
+        code = message.split(": ", 1)[0]
+    else:
+        code = "transaction-error"
+    return LifecycleDiagnostic(code, message)
+
+
 def _transition(
     context: Context,
     change_ref: str,
@@ -410,7 +540,14 @@ def _transition(
     action: TransitionAction,
     dry_run: bool,
     include_untracked: bool,
+    output_format: str = "text",
+    expect_plan_id: str | None = None,
 ) -> int:
+    # JSON output is only for accept, not begin
+    if output_format == "json" and action is not TransitionAction.ACCEPT:
+        print("ERROR: [cli-invalid] --format json is only supported for accept", file=sys.stderr)
+        return 2
+
     try:
         outcome = execute_transition(
             context.root,
@@ -419,16 +556,85 @@ def _transition(
             action=action,
             dry_run=dry_run,
             include_untracked=include_untracked,
-            on_plan=_print_lifecycle_plan,
+            expect_plan_id=expect_plan_id,
+            on_plan=_print_lifecycle_plan if output_format == "text" else None,
         )
     except LifecycleError as exc:
         diagnostic = exc.diagnostic
-        print(f"ERROR: [{diagnostic.code}] {diagnostic.message}", file=sys.stderr)
-        if diagnostic.next_command is not None:
-            print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
+        if output_format == "json":
+            journal_retained = _journal_exists_for_transition(
+                context.root, context.settings, change_ref, action, exc
+            )
+            _print_acceptance_json(
+                plan=None,
+                execution_status=ExecutionStatus.REJECTED,
+                expectation="not-provided",
+                findings=(),
+                diagnostic=diagnostic,
+                journal_retained=journal_retained,
+            )
+        else:
+            print(f"ERROR: [{diagnostic.code}] {diagnostic.message}", file=sys.stderr)
+            if diagnostic.next_command is not None:
+                print(f"NEXT: {diagnostic.next_command}", file=sys.stderr)
         return 1
     except TransactionError as exc:
-        print(f"ERROR: [{type(exc).__name__}] {exc}", file=sys.stderr)
+        if output_format == "json":
+            journal_retained = _journal_exists_for_transition(
+                context.root, context.settings, change_ref, action, exc
+            )
+            diagnostic = _derive_diagnostic_from_transaction_error(exc)
+            _print_acceptance_json(
+                plan=None,
+                execution_status=ExecutionStatus.REJECTED,
+                expectation="not-provided",
+                findings=(),
+                diagnostic=diagnostic,
+                journal_retained=journal_retained,
+            )
+        else:
+            print(f"ERROR: [{type(exc).__name__}] {exc}", file=sys.stderr)
+        return 1
+
+    if output_format == "json":
+        _print_acceptance_json(
+            plan=outcome.plan,
+            execution_status=outcome.execution_status,
+            expectation=outcome.expectation,
+            findings=outcome.final_findings,
+            diagnostic=outcome.diagnostic,
+            completed_mutations=outcome.completed_mutations,
+            total_mutations=outcome.total_mutations,
+            journal_retained=outcome.journal_retained,
+        )
+        # Exit codes for JSON output
+        if outcome.execution_status == ExecutionStatus.REJECTED:
+            return 1
+        if outcome.execution_status == ExecutionStatus.INTERRUPTED:
+            return 1
+        if outcome.execution_status == ExecutionStatus.VALIDATION_FAILED:
+            return 1
+        return 0
+
+    # Text output - check execution_status for rejection/interruption cases
+    if outcome.execution_status == ExecutionStatus.REJECTED:
+        # Expectation-related rejection
+        if outcome.diagnostic is not None:
+            print(f"ERROR: [{outcome.diagnostic.code}] {outcome.diagnostic.message}", file=sys.stderr)
+        else:
+            print("ERROR: [accept-rejected] acceptance rejected", file=sys.stderr)
+        return 1
+    if outcome.execution_status == ExecutionStatus.INTERRUPTED:
+        # Interruption after crossing the journal boundary
+        if outcome.diagnostic is not None:
+            print(f"ERROR: [{outcome.diagnostic.code}] {outcome.diagnostic.message}", file=sys.stderr)
+        else:
+            print("ERROR: [accept-interrupted] acceptance interrupted", file=sys.stderr)
+        print(f"completed {outcome.completed_mutations}/{outcome.total_mutations} mutations; journal retained", file=sys.stderr)
+        return 1
+    if outcome.execution_status == ExecutionStatus.VALIDATION_FAILED:
+        _print_findings([finding for finding in outcome.final_findings if finding.level == "ERROR"])
+        print("transition applied but final validation failed; journal retained", file=sys.stderr)
         return 1
     if outcome.already_applied:
         state_word = "accepted" if action is TransitionAction.ACCEPT else "in-progress"
@@ -573,6 +779,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             action=TransitionAction.ACCEPT,
             dry_run=args.dry_run,
             include_untracked=args.include_untracked,
+            output_format=args.format,
+            expect_plan_id=args.expect_plan_id,
         )
     if args.command == "begin":
         return _transition(

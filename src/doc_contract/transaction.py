@@ -49,6 +49,18 @@ class Mutation:
             "staged": self.staged,
         }
 
+    def as_descriptor(self) -> dict[str, str | None]:
+        """Content-free mutation projection for public manifests.
+
+        This is the smallest shared projection consumed by both reconciliation
+        and acceptance JSON output. It excludes private hashes and content.
+        """
+        return {
+            "kind": self.kind,
+            "path": self.path,
+            "destination": self.destination,
+        }
+
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> Mutation:
         kind = raw.get("kind")

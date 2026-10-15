@@ -40,6 +40,45 @@ surrounding rationale are preserved byte-for-byte. A located roadmap line whose 
 single unambiguous rewritable presentation is rejected as `roadmap-invalid` during planning, before
 projected repository validation and before any mutation.
 
+`--format {text,json}` selects the output format. The default `text` produces the existing
+human-readable summary. `json` produces exactly one versioned JSON object with schema_version=1,
+kind=acceptance-transition, a content-free plan projection, and execution status. JSON output
+excludes document bodies, mutation contents, unified diffs, individual before/after hashes,
+journal paths, arbitrary gate text, capability arguments or output, and secret values.
+
+`--expect-plan-id ID` enables optimistic concurrency control. The identifier must be in canonical
+form `sha256:<64 lowercase hex>`. When supplied, the command recomputes the plan identifier and
+compares it to the expected value before any mutation. A mismatch reports execution.status=rejected,
+expectation=mismatch, and exits nonzero without creating a journal or applying any mutation.
+A malformed identifier is rejected without echoing the supplied string. A dry-run with a matching
+expectation reports not-applied/matched and exits 0.
+
+The `plan_id` identifies the complete acceptance transaction, including the selected change,
+transition date, options, roadmap projection, and dependent fingerprint refreshes. It is distinct
+from the accepted-document identity: the exact accepted `change.md` bytes plus their SHA-256 digest
+identify the accepted work contract, while `plan_id` identifies the ephemeral operation manifest.
+A downstream consumer may capture the accepted bytes and digest outside the mutable index and
+proceed through `begin` and implementation without an intermediate commit; acceptance remains
+logically prior to implementation, and the runtime never stages or commits Git changes.
+
+**Already-applied expectation limitation:** When a change is already accepted and no active journal
+exists to prove the original plan, a supplied `--expect-plan-id` cannot be verified. The command
+reports `execution.status: already-applied` and `execution.expectation: not-verifiable`, then exits
+0. The expectation is not compared against a recomputed plan because the original transaction
+context is unavailable.
+
+**Path-scoped transfer or staging:** The mutation paths in the plan manifest describe what the
+acceptance invocation will mutate, but they do not guarantee exact transfer or staging when a
+planned path contains pre-existing mixed edits. Path-scoped transfer or staging is exact only from
+an isolated or otherwise owned baseline, or when the caller controls patch transfer or staging.
+Documentation must state this limitation; the operation manifest is an ephemeral computed
+description, not an ownership boundary.
+
+**Optional checkpoint policy:** The provider never requires a checkpoint. A downstream consumer may
+capture the accepted bytes and digest outside the mutable index and proceed through `begin` and
+implementation without an intermediate commit. Acceptance remains logically prior to implementation,
+and the runtime neither stages nor commits Git changes.
+
 ### `begin`
 
 Start work on one accepted change by transitioning it to `in-progress`, preserving an existing

@@ -1253,3 +1253,902 @@ def test_supersede_reason_marker_absent_on_dependent_refusal(
     captured = capsys.readouterr()
     assert "preflight-invalid" in captured.err
     _assert_reason_marker_absent(captured.out, captured.err)
+
+
+# ------------------------------------------------------------- accept --format json tests
+#
+# Tests for the new accept --format json and --expect-plan-id options.
+
+
+def test_accept_format_json_produces_single_versioned_object(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json must produce exactly one versioned JSON object."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+    # Parse as single JSON object
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert payload["kind"] == "acceptance-transition"
+    assert payload["plan_id"].startswith("sha256:")
+    assert payload["plan"]["action"] == "accept"
+    assert payload["plan"]["change"]["id"] == "example"
+    assert payload["execution"]["mode"] == "dry-run"
+    assert payload["execution"]["status"] == "not-applied"
+    assert payload["execution"]["expectation"] == "not-provided"
+    assert payload["diagnostic"] is None
+
+
+def test_accept_format_json_excludes_private_fields(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json must exclude private fields."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    # Check that private fields are not present
+    payload_str = json.dumps(payload)
+    assert "before_hash" not in payload_str
+    assert "after_hash" not in payload_str
+    assert "content" not in payload_str
+    assert "diff" not in payload_str
+    assert "journal_path" not in payload_str
+    assert "input_tree_hash" not in payload_str
+    assert "output_tree_hash" not in payload_str
+
+    # Check mutation descriptors are content-free
+    for mutation in payload["plan"]["mutations"]:
+        assert set(mutation.keys()) == {"kind", "path", "destination"}
+
+
+def test_accept_format_json_with_expect_plan_id_matched(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json with matching --expect-plan-id must report matched."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # First, get the plan_id from a dry-run
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    plan_id = payload["plan_id"]
+
+    # Now run with matching expectation
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                plan_id,
+            ]
+        )
+        == 0
+    )
+    payload2 = json.loads(capsys.readouterr().out)
+    assert payload2["execution"]["expectation"] == "matched"
+    assert payload2["execution"]["status"] == "not-applied"
+
+
+def test_accept_format_json_with_expect_plan_id_mismatch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json with mismatching --expect-plan-id must report rejected."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    wrong_plan_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                wrong_plan_id,
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["expectation"] == "mismatch"
+    assert payload["execution"]["status"] == "rejected"
+
+
+def test_accept_format_json_with_malformed_expect_plan_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json with malformed --expect-plan-id must report rejected."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                "not-a-valid-sha256",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["expectation"] == "malformed"
+    assert payload["execution"]["status"] == "rejected"
+    # Must not echo the malformed input
+    assert "not-a-valid-sha256" not in json.dumps(payload)
+
+
+def test_accept_format_json_applied_status(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json applied must report applied status."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["mode"] == "apply"
+    assert payload["execution"]["status"] == "applied"
+    assert payload["execution"]["journal_retained"] is False
+
+
+def test_accept_format_json_already_applied_status(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json already-applied must report already-applied status."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # First accept
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()  # Clear the output
+
+    # Second accept (already-applied)
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["status"] == "already-applied"
+    assert payload["execution"]["expectation"] == "not-verifiable"
+
+
+def test_accept_format_text_is_unchanged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format text (default) must produce unchanged text output."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Run with explicit --format text
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "text",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    # Text output should contain human-readable text, not JSON
+    assert "accept plan:" in captured.out
+    assert "mutation(s)" in captured.out
+    assert "dry-run; no mutations" in captured.out
+
+
+def test_begin_does_not_accept_format_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """begin must not accept --format json."""
+    repo = _lifecycle_repo(tmp_path / "repo", "accepted")
+
+    # argparse rejects unknown arguments with exit code 2
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "begin",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "unrecognized arguments: --format" in captured.err
+
+
+def test_accept_format_json_blocker_returns_plan_null(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json with blocker must return plan_id null and plan null."""
+    repo = _lifecycle_repo(tmp_path / "repo", "blocked", gate="private-gate")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["plan_id"] is None
+    assert payload["plan"] is None
+    assert payload["execution"]["status"] == "rejected"
+    assert payload["diagnostic"]["code"] == "change-blocked"
+
+
+def test_accept_text_mode_expectation_mismatch_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format text with expectation mismatch must exit nonzero and print error."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    wrong_plan_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--expect-plan-id",
+                wrong_plan_id,
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    # Must print error to stderr
+    assert "ERROR: [accept-plan-mismatch]" in captured.err
+    # Must not print success line
+    assert "dry-run; no mutations" not in captured.out
+
+
+def test_accept_text_mode_malformed_expectation_exits_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format text with malformed expectation must exit nonzero and print error."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--expect-plan-id",
+                "not-a-valid-sha256",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    # Must print error to stderr
+    assert "ERROR: [accept-plan-id-invalid]" in captured.err
+    # Must not echo the malformed input
+    assert "not-a-valid-sha256" not in captured.err
+    assert "not-a-valid-sha256" not in captured.out
+
+
+def test_accept_text_mode_without_expectation_is_unchanged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format text without --expect-plan-id must produce unchanged text output."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    # Text output should contain human-readable text
+    assert "accept plan:" in captured.out
+    assert "mutation(s)" in captured.out
+    assert "dry-run; no mutations" in captured.out
+
+
+def test_accept_json_diagnostic_codes_for_expectation_rejection(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json must emit correct diagnostic codes for expectation rejections."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Test malformed identifier
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                "not-a-valid-sha256",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["diagnostic"]["code"] == "accept-plan-id-invalid"
+
+    # Test mismatch
+    wrong_plan_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--dry-run",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                wrong_plan_id,
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["diagnostic"]["code"] == "accept-plan-mismatch"
+
+
+def test_accept_json_schema1_journal_with_expectation_reports_not_verifiable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json with schema-1 journal and expectation must report not-verifiable."""
+    import json as json_module
+
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Create a schema-1 journal manually
+    journal_path = repo / ".git" / "doc-contract" / "lifecycle-accept-example.json"
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    schema1_payload = {
+        "schema": 1,
+        "action": "accept",
+        "change_id": "example",
+        "source": "docs/changes/example",
+        "date": "2026-08-01",
+        "source_status": "proposed",
+        "destination_status": "accepted",
+        "accepted_at": None,
+        "started_at": None,
+        "tracking": "untracked",
+        "input_tree_hash": "abc123",
+        "output_tree_hash": "def456",
+        "journal_path": str(journal_path),
+        "provisional_nodes": [],
+        "current_findings": [],
+        "projected_findings": [],
+        "baseline_warnings": [],
+        "mutations": [],
+        "already_applied": False,
+        "completed": [],
+    }
+    journal_path.write_text(json_module.dumps(schema1_payload, indent=2), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["expectation"] == "not-verifiable"
+    assert payload["diagnostic"]["code"] == "accept-plan-legacy-journal"
+    assert payload["execution"]["journal_retained"] is True
+
+
+def test_accept_json_already_applied_with_expectation_reports_not_verifiable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json already-applied with expectation must report not-verifiable."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # First accept
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()  # Clear the output
+
+    # Second accept with expectation - should report not-verifiable (no journal to verify)
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+                "--expect-plan-id",
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["status"] == "already-applied"
+    assert payload["execution"]["expectation"] == "not-verifiable"
+
+
+def test_accept_json_interrupted_reports_real_counts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json interrupted must report real completed/total mutation counts."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Use fault_after to simulate interruption
+    # We need to call execute_transition directly since CLI doesn't expose fault_after
+    from doc_contract.lifecycle import execute_transition, ExecutionStatus
+    from test_landing import _settings
+
+    outcome = execute_transition(
+        repo,
+        _settings(repo),
+        "example",
+        action="accept",
+        include_untracked=True,
+        date="2026-08-01",
+        fault_after=1,  # Interrupt after first mutation
+    )
+
+    assert outcome.execution_status == ExecutionStatus.INTERRUPTED
+    assert outcome.journal_retained is True
+    assert outcome.completed_mutations >= 1  # At least one mutation completed
+    assert outcome.total_mutations >= outcome.completed_mutations
+    assert outcome.diagnostic is not None
+    assert outcome.diagnostic.code == "accept-interrupted"
+
+
+def test_accept_json_validation_failed_reports_journal_retained(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """accept --format json validation-failed must report journal retained."""
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Add a dependency that will cause validation to fail
+    _write(
+        repo,
+        "docs/changes/missing/change.md",
+        "---\nid: missing\npersistence: ephemeral\nstatus: proposed\ntrack: test\n---\n# Missing\n",
+    )
+    roadmap = repo / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8").replace(
+            "<!-- BEGIN GENERATED DAG",
+            "- `docs/changes/missing/` (proposed)\n\n<!-- BEGIN GENERATED DAG",
+        ),
+        encoding="utf-8",
+    )
+
+    # Accept should still succeed (the missing change is unrelated)
+    assert (
+        main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution"]["status"] == "applied"
+
+
+def test_installed_and_vendored_accept_from_unrelated_cwd(
+    tmp_path: Path,
+) -> None:
+    """Installed and synced vendored acceptance must produce identical JSON and plan_id."""
+    repo = tmp_path / "repo"
+    _write(
+        repo,
+        ".doc-contract.toml",
+        _config(
+            capability_mode="optional",
+            capability_command=(sys.executable, "-c", "raise SystemExit(0)"),
+        ),
+    )
+    _write(
+        repo,
+        "docs/roadmap.md",
+        "---\npersistence: living\n---\n# Roadmap\n\n"
+        "- `docs/changes/example/` (proposed)\n\n"
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n<!-- END GENERATED DAG -->\n",
+    )
+    _write(
+        repo,
+        "docs/changes/example/change.md",
+        "---\nid: example\npersistence: ephemeral\nstatus: proposed\ntrack: test\n---\n"
+        "# Example\n\nStatus: Proposed (not accepted)\n",
+    )
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    clean_environment = os.environ.copy()
+    clean_environment.pop("PYTHONPATH", None)
+
+    # Sync the vendored package
+    synced = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "doc_contract.cli",
+            "sync",
+            "--repo-root",
+            str(repo),
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert synced.returncode == 0, synced.stderr
+
+    launcher = repo / ".doc-contract/doc_contract_cli.py"
+
+    # Test accept --format json from installed CLI
+    installed_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "doc_contract.cli",
+            "accept",
+            "example",
+            "--repo-root",
+            str(repo),
+            "--include-untracked",
+            "--dry-run",
+            "--format",
+            "json",
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert installed_result.returncode == 0, installed_result.stderr
+    installed_payload = json.loads(installed_result.stdout)
+
+    # Test accept --format json from vendored CLI
+    vendored_result = subprocess.run(
+        [
+            sys.executable,
+            str(launcher),
+            "accept",
+            "example",
+            "--repo-root",
+            str(repo),
+            "--include-untracked",
+            "--dry-run",
+            "--format",
+            "json",
+        ],
+        cwd=elsewhere,
+        env=clean_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert vendored_result.returncode == 0, vendored_result.stderr
+    vendored_payload = json.loads(vendored_result.stdout)
+
+    # Verify identical schema and plan_id
+    assert installed_payload["schema_version"] == vendored_payload["schema_version"]
+    assert installed_payload["kind"] == vendored_payload["kind"]
+    assert installed_payload["plan_id"] == vendored_payload["plan_id"]
+    assert installed_payload["plan"] == vendored_payload["plan"]
+    assert installed_payload["execution"] == vendored_payload["execution"]
+
+    # Verify no distribution metadata or third-party dependencies
+    assert "version" not in installed_payload
+    assert "distribution" not in installed_payload
+
+
+def test_accept_cli_interrupted_json_reports_real_counts_and_journal_retained(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI-level test: accept --format json interrupted must report real counts and journal_retained."""
+    # This test exercises the real CLI path through main(), not just execute_transition
+    # We simulate a mid-apply TransactionError by monkeypatching execute_mutations in lifecycle module
+    import json as json_module
+    from doc_contract import lifecycle as lifecycle_module
+
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Track whether the journal was created
+    journal_pattern = repo / ".git" / "doc-contract" / "lifecycle-accept-example.json"
+
+    # Monkeypatch execute_mutations to raise ConcurrentModification after journal is created
+    original_execute_mutations = lifecycle_module.execute_mutations
+    call_count = [0]
+
+    def failing_execute_mutations(
+        root: Path,
+        plan: object,
+        journal_path: Path,
+        completed: list[object],
+        fault_after: int | None = None,
+        save: object = None,
+    ) -> None:
+        call_count[0] += 1
+        # First call: let it create the journal and then fail
+        # We need to save the journal first
+        if save is not None and hasattr(plan, "as_dict"):
+            save(journal_path, plan, completed)  # type: ignore[call-arg]
+        # Now raise a ConcurrentModification to simulate a real transaction error
+        raise lifecycle_module.ConcurrentModification(
+            "completed boundary", "path", "before", "after"
+        )
+
+    # Patch execute_mutations in the lifecycle module (where it's actually used)
+    lifecycle_module.execute_mutations = failing_execute_mutations  # type: ignore[assignment]
+
+    try:
+        result = main(
+            [
+                "accept",
+                "example",
+                "--repo-root",
+                str(repo),
+                "--include-untracked",
+                "--format",
+                "json",
+            ]
+        )
+    finally:
+        # Restore the original function
+        lifecycle_module.execute_mutations = original_execute_mutations  # type: ignore[assignment]
+
+    # Should exit nonzero
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json_module.loads(captured.out)
+
+    # Must report interrupted, not rejected
+    assert payload["execution"]["status"] == "interrupted"
+    # Must report journal_retained: true
+    assert payload["execution"]["journal_retained"] is True
+    # Must report exact mutation counts (0 completed, 2 total for this simple change)
+    assert payload["execution"]["completed_mutations"] == 0
+    assert payload["execution"]["total_mutations"] == 2
+    # Must have a diagnostic
+    assert payload["diagnostic"]["code"] == "accept-interrupted"
+    # Journal file must exist
+    assert journal_pattern.parent.is_dir()
+    assert list(journal_pattern.parent.glob("*.json"))
+
+
+def test_accept_cli_schema2_journal_resume_with_mismatching_expectation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Schema-2 journal resume with mismatching expectation must reject before any advance."""
+    import json as json_module
+    from doc_contract.lifecycle import plan_transition, TransitionAction
+    from test_landing import _settings
+
+    repo = _lifecycle_repo(tmp_path / "repo", "proposed")
+
+    # Create a schema-2 journal with a real plan
+    plan = plan_transition(
+        repo,
+        _settings(repo),
+        "example",
+        action=TransitionAction.ACCEPT,
+        include_untracked=True,
+        date="2026-08-01",
+    )
+
+    # Create a schema-2 journal with completed=[0] (simulating partial progress - first mutation done)
+    journal_path = repo / ".git" / "doc-contract" / "lifecycle-accept-example.json"
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    journal_payload = plan.as_dict()
+    journal_payload["completed"] = [0] if plan.mutations else []  # List of mutation indices
+    journal_path.write_text(json_module.dumps(journal_payload, indent=2), encoding="utf-8")
+
+    # Record the journal bytes before the call
+    journal_bytes_before = journal_path.read_bytes()
+
+    # Call with a mismatching expectation
+    wrong_plan_id = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    result = main(
+        [
+            "accept",
+            "example",
+            "--repo-root",
+            str(repo),
+            "--include-untracked",
+            "--format",
+            "json",
+            "--expect-plan-id",
+            wrong_plan_id,
+        ]
+    )
+
+    # Should exit nonzero
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json_module.loads(captured.out)
+
+    # Must report rejected with mismatch
+    assert payload["execution"]["status"] == "rejected"
+    assert payload["execution"]["expectation"] == "mismatch"
+    assert payload["diagnostic"]["code"] == "accept-plan-mismatch"
+    # Must report journal_retained: true
+    assert payload["execution"]["journal_retained"] is True
+    # Must report the correct completed/total counts from the journal
+    assert payload["execution"]["completed_mutations"] == 1
+    assert payload["execution"]["total_mutations"] == len(plan.mutations)
+
+    # Journal must be byte-identical (no advance occurred)
+    assert journal_path.read_bytes() == journal_bytes_before

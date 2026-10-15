@@ -207,6 +207,8 @@ doc-contract update --repo-root /path/to/repo --include-untracked
 doc-contract stamp CHANGE_ID --repo-root /path/to/repo
 doc-contract sync --repo-root /path/to/repo
 doc-contract accept docs/changes/example --repo-root /path/to/repo --dry-run
+doc-contract accept docs/changes/example --repo-root /path/to/repo --dry-run --format json
+doc-contract accept docs/changes/example --repo-root /path/to/repo --dry-run --format json --expect-plan-id sha256:...
 doc-contract begin docs/changes/example --repo-root /path/to/repo --dry-run
 doc-contract reconcile mechanical docs/changes/example --phase entry --format json --repo-root /path/to/repo
 doc-contract reconcile mechanical docs/changes/example --phase exit --repo-root /path/to/repo
@@ -227,7 +229,30 @@ Discovery includes Git-tracked managed documents plus declared roots by default,
 `accept` and `begin` are explicit, hash-guarded, journaled transitions. `accept` records only an
 explicit user/reviewer authorization and never infers approval; `begin` starts work only from
 `accepted`. Both are offline and idempotent, preserve blocked state, and support dry-run and
-provisional `--include-untracked` planning. `land` accepts only `in-progress` changes, previews and then atomically applies the status, dependent fingerprints, roadmap, and archive
+provisional `--include-untracked` planning. `accept` additionally supports `--format json` for
+machine-readable output and `--expect-plan-id` for optimistic concurrency control: the plan
+identifier is computed from a domain-separated, schema-versioned canonical encoding of the public
+plan plus each mutation's private preimage and postimage hashes, and a mismatch rejects before any
+journal creation or mutation. The `plan_id` identifies the complete acceptance transaction,
+including roadmap and dependent metadata; it is distinct from the accepted-document identity,
+which is the exact `change.md` bytes plus their SHA-256 digest.
+
+**Already-applied expectation limitation:** When a change is already accepted and no active journal
+exists to prove the original plan, a supplied `--expect-plan-id` cannot be verified. The command
+reports `execution.status: already-applied` and `execution.expectation: not-verifiable`, then exits
+0.
+
+**Path-scoped transfer or staging:** The mutation paths in the plan manifest describe what the
+acceptance invocation will mutate, but they do not guarantee exact transfer or staging when a
+planned path contains pre-existing mixed edits. Path-scoped transfer or staging is exact only from
+an isolated or otherwise owned baseline, or when the caller controls patch transfer or staging.
+
+**Optional checkpoint policy:** A downstream consumer may capture the accepted bytes and digest
+outside the mutable index and proceed through `begin` and implementation without an intermediate
+commit; acceptance remains logically prior to implementation, and the runtime never stages or
+commits Git changes.
+
+`land` accepts only `in-progress` changes, previews and then atomically applies the status, dependent fingerprints, roadmap, and archive
 move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
 returns success without changing files or the Git index. Interrupted landings resume from the
 journal under Git metadata, and concurrent edits fail closed.

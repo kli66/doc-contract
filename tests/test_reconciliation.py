@@ -883,3 +883,41 @@ def test_blocked_metadata_is_detected_without_body_scraping(tmp_path: Path) -> N
         include_untracked=True,
     )
     assert report.gate_present is False
+
+
+def test_reconciliation_uses_shared_mutation_descriptor(tmp_path: Path) -> None:
+    """Reconciliation must use the shared Mutation.as_descriptor() projection."""
+
+    root = _repo(tmp_path)
+    _replace_status(root, "accepted")
+
+    report = reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="entry",
+        include_untracked=True,
+    )
+
+    assert report.ready
+    assert len(report.manifest.mutations) > 0
+
+    # Verify that each manifest mutation matches the shared descriptor
+    plan = plan_transition(
+        root,
+        _settings(root),
+        "transactional",
+        action=TransitionAction.BEGIN,
+        include_untracked=True,
+    )
+
+    for manifest_mutation, plan_mutation in zip(report.manifest.mutations, plan.mutations):
+        # The manifest mutation should match the shared descriptor exactly
+        shared_descriptor = plan_mutation.as_descriptor()
+        assert manifest_mutation.kind == shared_descriptor["kind"]
+        assert manifest_mutation.path == shared_descriptor["path"]
+        assert manifest_mutation.destination == shared_descriptor["destination"]
+
+        # Verify the as_dict() output matches
+        manifest_dict = manifest_mutation.as_dict()
+        assert manifest_dict == shared_descriptor

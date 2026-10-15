@@ -26,6 +26,8 @@ exposes skills as slash commands — `/<skill> <verb> …`; the runtime — `doc
 | roadmap DAG stale | `doc-contract update --repo-root <repo>` | CLI | any |
 | propose / start work on X | read `guides/new-change.md`; stop at `Proposed` | you | none |
 | review approved | `doc-contract accept <change> --repo-root <repo>` | CLI | proposed |
+| review approved (JSON) | `doc-contract accept <change> --repo-root <repo> --format json` | CLI | proposed |
+| review approved (with expectation) | `doc-contract accept <change> --repo-root <repo> --format json --expect-plan-id <id>` | CLI | proposed |
 | pick up / entry | mechanical entry report, the entry judgments in `guides/reconcile.md`, then `doc-contract begin <change>` | CLI + you | accepted |
 | land / archive | mechanical exit report, the exit judgments in `guides/reconcile.md`, `land --dry-run`, then `land` | CLI + you | in-progress |
 | retire a never-accepted proposal | `doc-contract supersede <change> --reason <text> --repo-root <repo>` | CLI | proposed |
@@ -55,6 +57,9 @@ semantic half is judgment.
 - The runtime stays stdlib-only: never add a dependency; use `string.Template` and f-strings.
 - Scanner output stays value-free: paths, lines, and names only, never values.
 - Configuring a source adapter or analyzer authorizes that executable to read only what the operating environment permits; it does NOT make the executable trusted by doc-contract. Operators must review adapter behavior and evidence-store privacy before enabling it. Source adapters own source-specific redaction before output; the core adds structural validation, caps, safe diagnostics, and generated-document secret scanning but does not claim to prove a semantically sensitive non-secret sentence is safe to disclose. Configured argv and adapter/analyzer output never appear in reports or diagnostics. Raw evidence and raw analyzer output are never written to the repository, journal, report, or CLI output. `--allow-external-analysis` is a per-invocation authorization that is never persisted or inferred.
+- **Already-applied expectation limitation:** When a change is already accepted and no active journal exists to prove the original plan, a supplied `--expect-plan-id` cannot be verified. The command reports `execution.status: already-applied` and `execution.expectation: not-verifiable`, then exits 0.
+- **Path-scoped transfer or staging:** The mutation paths in the plan manifest describe what the acceptance invocation will mutate, but they do not guarantee exact transfer or staging when a planned path contains pre-existing mixed edits. Path-scoped transfer or staging is exact only from an isolated or otherwise owned baseline, or when the caller controls patch transfer or staging.
+- **Optional checkpoint policy:** The provider never requires a checkpoint. A downstream consumer may capture the accepted bytes and digest outside the mutable index and proceed through `begin` and implementation without an intermediate commit.
 
 ## Read next
 

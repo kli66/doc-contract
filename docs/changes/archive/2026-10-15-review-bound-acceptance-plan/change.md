@@ -1,7 +1,7 @@
 ---
 id: review-bound-acceptance-plan
 persistence: ephemeral
-status: proposed
+status: landed
 track: lifecycle
 depends_on:
   - accepted-change-state
@@ -21,10 +21,14 @@ files_owned:
   - SKILL.md
   - AGENTS.template.md
   - docs/roadmap.md
+accepted_at: 2026-10-14
+started_at: 2026-10-14
+landed_at: 2026-10-15
+archive_path: docs/changes/archive/2026-10-15-review-bound-acceptance-plan
 ---
 # Bind reviewed acceptance plans to application
 
-Status: Proposed (not accepted) · Proposed 2026-07-31
+Status: Landed · 2026-10-15
 
 **Upstream dependencies:** `accepted-change-state` is landed and owns the deterministic `LifecyclePlan`, hash-guarded mutation execution, interruption journal, recovery, and idempotent acceptance behavior. `mechanical-reconciliation` is landed and establishes a versioned, content-free public manifest pattern distinct from private journal serialization. `actionable-lifecycle-diagnostics` is landed and supplies stable value-free lifecycle error fields for text and JSON callers. All inputs are available. No ADR, external service, live input, or third-party package gates implementation.
 
