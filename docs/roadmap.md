@@ -52,8 +52,9 @@ persistence: living
 - `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
 - `docs/changes/archive/2026-10-15-review-bound-acceptance-plan/` (landed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-10-14-supersede-unaccepted-proposal/` (landed) — add a packaged supersede transition that retires a never-accepted proposed change into a frozen lineage record instead of the forbidden manual `git mv`; depends on accepted state, the landed transactional archive command, and the frozen `docs/archive/` lineage discovery
-- `docs/changes/retirement-guards-and-roadmap-entry-locator/` (proposed) — give the retirement verbs one shared roadmap-entry locator instead of two drifting matchers, refuse a folder holding more than one change node rather than retiring its siblings silently, and document the one-node-per-folder and `change.md` conventions; depends on the landed supersede transition, roadmap-status canonicalization, and actionable lifecycle diagnostics
+- `docs/changes/retirement-guards-and-roadmap-entry-locator/` (proposed) — give all three roadmap-prose rewriters one shared entry locator so landing can no longer retarget a prefix sibling's entry or flip another line's status, refuse a folder holding more than one change node rather than retiring its siblings silently, and document the one-node-per-folder and `change.md` conventions; depends on the landed supersede transition, roadmap-status canonicalization, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
+- `docs/changes/stamp-untracked-and-suspect-link-wording/` (proposed) — give `stamp` the `--include-untracked` discovery opt-in the other graph-resolving verbs expose and make the `[suspect-link]` warning name the depender and the command that refreshes its fingerprint; depends on the landed discovery and lifecycle hardening
 
 <!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->
 ```mermaid
@@ -79,6 +80,7 @@ flowchart TD
     runtime_source_provenance["runtime-source-provenance (proposed)"]
     secret_handling_guardrails["secret-handling-guardrails (landed)"]
     skill_routing_surface["skill-routing-surface (landed)"]
+    stamp_untracked_and_suspect_link_wording["stamp-untracked-and-suspect-link-wording (proposed)"]
     supersede_unaccepted_proposal["supersede-unaccepted-proposal (landed)"]
     transactional_land_command["transactional-land-command (landed)"]
     unified_offline_live_verification["unified-offline-live-verification (landed)"]
@@ -98,6 +100,7 @@ flowchart TD
     canonicalize_roadmap_status_transitions --> retirement_guards_and_roadmap_entry_locator
     discovery_lifecycle_hardening --> edge_fingerprint_policy
     discovery_lifecycle_hardening --> reuse_document_discovery_for_secret_scanning
+    discovery_lifecycle_hardening --> stamp_untracked_and_suspect_link_wording
     discovery_lifecycle_hardening --> supersede_unaccepted_proposal
     edge_fingerprint_policy --> landed_graph_transition_ownership
     edge_fingerprint_policy --> portable_install_contract_convergence
