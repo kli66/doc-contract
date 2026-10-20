@@ -1,7 +1,7 @@
 ---
 id: stamp-untracked-and-suspect-link-wording
 persistence: ephemeral
-status: proposed
+status: landed
 track: lifecycle
 depends_on:
   - discovery-lifecycle-hardening
@@ -14,10 +14,14 @@ files_owned:
   - docs/spec/capabilities.md
   - README.md
   - docs/roadmap.md
+accepted_at: 2026-10-20
+started_at: 2026-10-20
+landed_at: 2026-10-20
+archive_path: docs/changes/archive/2026-10-20-stamp-untracked-and-suspect-link-wording
 ---
 # `stamp --include-untracked` and an actionable `[suspect-link]` remediation
 
-Status: Proposed (not accepted) · Proposed 2026-10-19
+Status: Landed · 2026-10-20
 
 **Upstream dependencies:** `discovery-lifecycle-hardening` is landed and is the canonical owner of
 the tracked/declared discovery boundary and of its explicit `--include-untracked` opt-in, which its

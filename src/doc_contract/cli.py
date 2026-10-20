@@ -70,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--include-untracked", action="store_true")
     stamp = subparsers.add_parser("stamp", parents=[common], help="refresh a node's hashes")
     stamp.add_argument("node_id")
+    stamp.add_argument("--include-untracked", action="store_true")
     subparsers.add_parser("sync", parents=[common], help="vendor this pinned package")
     reconcile = subparsers.add_parser(
         "reconcile", help="report deterministic reconciliation readiness"
@@ -183,9 +184,11 @@ def _update(context: Context, *, include_untracked: bool) -> int:
     return 0
 
 
-def _stamp(context: Context, node_id: str) -> int:
+def _stamp(context: Context, node_id: str, *, include_untracked: bool) -> int:
     try:
-        changed = stamp_node(context.root, context.settings, node_id)
+        changed = stamp_node(
+            context.root, context.settings, node_id, include_untracked=include_untracked
+        )
     except ValueError as exc:
         print(f"ERROR: [stamp-failed] {exc}", file=sys.stderr)
         return 1
@@ -743,7 +746,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "update":
         return _update(context, include_untracked=args.include_untracked)
     if args.command == "stamp":
-        return _stamp(context, args.node_id)
+        return _stamp(context, args.node_id, include_untracked=args.include_untracked)
     if args.command == "sync":
         return _sync(context)
     if args.command == "reconcile":

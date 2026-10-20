@@ -793,7 +793,9 @@ def validate(
                             "WARN",
                             "suspect-link",
                             f"{n.id} → {e.target}: target changed since review "
-                            f"(recorded {e.fingerprint}, now {current}); re-review and re-stamp",
+                            f"(recorded {e.fingerprint}, now {current}); review the target and run "
+                            f"`doc-contract stamp {n.id}` (add `--include-untracked` while it is "
+                            f"provisional)",
                             (n.id, e.target),
                         )
                     )
@@ -1878,9 +1880,11 @@ def _render_front_matter(values: Mapping[str, FMValue], body: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def stamp_node(root: Path, settings: Settings, node_id: str) -> bool:
+def stamp_node(
+    root: Path, settings: Settings, node_id: str, *, include_untracked: bool = False
+) -> bool:
     """Refresh one node's dependency fingerprints and, when frozen, its self hash."""
-    nodes = discover_nodes(root.resolve(), settings)
+    nodes = discover_nodes(root.resolve(), settings, include_untracked=include_untracked)
     node = nodes.get(node_id)
     if node is None:
         raise ValueError(f"unknown node id {node_id!r}")

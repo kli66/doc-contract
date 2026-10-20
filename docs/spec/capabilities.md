@@ -25,7 +25,10 @@ With `--include-untracked`, print the provisional node preview before writing th
 ### `stamp`
 
 Record or refresh one active node's dependency fingerprints, including under advisory policy, or
-refresh one frozen node's strict `self_hash` after review.
+refresh one frozen node's strict `self_hash` after review. The operator names the single node, so
+`--include-untracked` admits one provisional (untracked) change node to discovery without printing
+a preview; the outcome line reports the result. Without the flag, an untracked node is reported as
+an unknown node id and nothing is written.
 
 ### `accept`
 

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import doc_contract.resolver as resolver_module
+from doc_contract.cli import main
 from doc_contract.config import Settings
 from doc_contract.resolver import (
     Edge,
@@ -24,6 +25,7 @@ from doc_contract.resolver import (
     project_supersede,
     render_block,
     resolve,
+    stamp_node,
     validate,
 )
 
@@ -69,6 +71,18 @@ def _change(node_id: str, *, fingerprint: str | None = None) -> str:
         "persistence: ephemeral\nstatus: proposed\ntrack: test\n"
         f"{edge}"
         "---\n# Change\n"
+    )
+
+
+def _config() -> str:
+    return (
+        "schema_version = 1\n"
+        'repo_name = "fixture"\n'
+        'roadmap = "docs/roadmap.md"\n'
+        "\n[root_nodes]\n"
+        'roadmap = "docs/roadmap.md"\n'
+        "\n[capability]\n"
+        'mode = "skip"\n'
     )
 
 
@@ -289,8 +303,59 @@ def test_stale_edge_hash_warns_under_both_policies(tmp_path: Path) -> None:
 
     for policy in ("advisory", "required"):
         result = resolve(root, _settings(root, edge_fingerprints=policy))
-        assert "suspect-link" in {finding.code for finding in result.warnings}
+        suspect = [finding for finding in result.warnings if finding.code == "suspect-link"]
+        assert len(suspect) == 1
+        finding = suspect[0]
+        assert finding.level == "WARN"
+        assert finding.subjects == ("source", "target")
+        assert finding.message.startswith(
+            "source → target: target changed since review (recorded "
+        )
+        assert "now " in finding.message
+        assert "`doc-contract stamp source`" in finding.message
+        assert "(add `--include-untracked` while it is provisional)" in finding.message
         assert "suspect-link" not in {finding.code for finding in result.errors}
+
+
+def test_stamp_clears_suspect_link_after_dependency_archived(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "repo"
+    _write(root, ".doc-contract.toml", _config())
+    _write(root, "docs/roadmap.md", _roadmap("source"))
+    target = _write(
+        root,
+        "docs/changes/target/change.md",
+        "---\nid: target\npersistence: ephemeral\nstatus: landed\ntrack: test\n---\n# Target\n",
+    )
+    _write(root, "docs/changes/source/change.md", _change("source", fingerprint="0" * 16))
+    settings = _settings(root)
+
+    def suspect_warnings() -> int:
+        result = resolve(root, settings)
+        return len([finding for finding in result.warnings if finding.code == "suspect-link"])
+
+    assert suspect_warnings() == 1
+
+    # Land the dependency: archive it under docs/changes/archive/<date>-<name>/ and change its body.
+    original_fingerprint = fingerprint(target.read_text(encoding="utf-8"))
+    archived = root / "docs/changes/archive/2026-01-01-target/change.md"
+    archived.parent.mkdir(parents=True)
+    archived.write_text(
+        "---\nid: target\npersistence: ephemeral\nstatus: landed\ntrack: test\n"
+        "---\n# Target\n\nChanged after landing.\n",
+        encoding="utf-8",
+    )
+    target.unlink()
+    assert fingerprint(archived.read_text(encoding="utf-8")) != original_fingerprint
+
+    # The landed dependency itself has no stampable contract (CLI exits 1).
+    assert main(["stamp", "target", "--repo-root", str(root)]) == 1
+    assert "has no stampable contract" in capsys.readouterr().err
+
+    # The depender is where the fingerprint lives, so stamping it clears the warning.
+    assert stamp_node(root, settings, "source") is True
+    assert suspect_warnings() == 0
 
 
 def test_fingerprint_canonicalization_boundary() -> None:

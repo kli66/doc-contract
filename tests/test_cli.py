@@ -371,6 +371,82 @@ def test_stamp_refreshes_active_dependency_fingerprint(
     assert "source stamped" in capsys.readouterr().out
 
 
+def test_stamp_include_untracked_admits_provisional_node(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo(tmp_path / "repo")
+    target = _write(
+        repo,
+        "docs/changes/target/change.md",
+        "---\nid: target\npersistence: ephemeral\nstatus: landed\ntrack: t\n---\n# Target\n",
+    )
+    tracked = _write(
+        repo,
+        "docs/changes/tracked/change.md",
+        "---\nid: tracked\npersistence: ephemeral\nstatus: in-progress\ntrack: t\n"
+        "depends_on:\n  - target\n---\n# Tracked\n",
+    )
+    roadmap = repo / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + "- `docs/changes/tracked/` (in-progress)\n"
+        "- `docs/changes/provisional/` (proposed)\n",
+        encoding="utf-8",
+    )
+    provisional = _write(
+        repo,
+        "docs/changes/provisional/change.md",
+        "---\nid: provisional\npersistence: ephemeral\nstatus: proposed\ntrack: t\n"
+        "depends_on:\n  - target\n---\n# Provisional\n",
+    )
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "add",
+            ".doc-contract.toml",
+            "docs/roadmap.md",
+            "docs/changes/target/change.md",
+            "docs/changes/tracked/change.md",
+        ],
+        check=True,
+    )
+
+    # Without the flag the untracked node is absent from discovery entirely.
+    assert main(["stamp", "provisional", "--repo-root", str(repo)]) == 1
+    captured = capsys.readouterr()
+    assert "unknown node id 'provisional'" in captured.err
+    assert "untracked" not in captured.out
+    assert "fingerprints" not in provisional.read_text(encoding="utf-8")
+
+    # With the flag the named node is admitted without any discovery preview.
+    assert (
+        main(["stamp", "provisional", "--repo-root", str(repo), "--include-untracked"]) == 0
+    )
+    captured = capsys.readouterr()
+    assert "provisional stamped" in captured.out
+    assert "untracked-node-included" not in captured.out
+    assert fingerprint(target.read_text(encoding="utf-8")) in provisional.read_text(
+        encoding="utf-8"
+    )
+
+    # A tracked node stamps identically with and without the flag.
+    assert main(["stamp", "tracked", "--repo-root", str(repo)]) == 0
+    assert "tracked stamped" in capsys.readouterr().out
+    assert fingerprint(target.read_text(encoding="utf-8")) in tracked.read_text(encoding="utf-8")
+    assert main(["stamp", "tracked", "--repo-root", str(repo), "--include-untracked"]) == 0
+    assert "tracked already current" in capsys.readouterr().out
+
+    # The follow-up check gains no new error or warning for the stamped nodes.
+    assert main(["check", "--repo-root", str(repo), "--offline", "--include-untracked"]) == 0
+    check_output = capsys.readouterr().out
+    assert "ERROR" not in check_output
+    assert "suspect-link" not in check_output
+    assert "edge-hash-" not in check_output
+
+
 def test_sync_writes_pinned_manifest_and_is_idempotent(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
