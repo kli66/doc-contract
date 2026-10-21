@@ -48,6 +48,12 @@ semantic half is judgment.
 - An unaccepted folder never begins work; a blocked one stays under manual handling.
 - A never-accepted proposal retires through `supersede`, never a manual `git mv`; `check` flags a
   folder that vanished without a lineage record.
+- `land` and `supersede` act on one change node per folder, and that node document is `change.md`;
+  a folder holding more than one change node is refused.
+- The roadmap entry `land` enforces is one pre-DAG line plus its indented continuations citing the
+  folder, with exactly one status presentation across the block; a missing, duplicated,
+  cross-referenced, statusless, unclosed, or post-generated-region-only entry is refused as a
+  counted `roadmap-invalid`.
 - A trivial edit earns a roadmap line and no folder.
 - A not-ready mechanical report stops the transition instead of being improvised around.
 

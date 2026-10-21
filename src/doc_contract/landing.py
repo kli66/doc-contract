@@ -15,12 +15,12 @@ from .lifecycle import (
     LifecycleError,
     LifecycleRequest,
     _resolve_preflight,
+    _roadmap_with_block,
     classify_change,
 )
 from .resolver import (
-    DAG_BEGIN_PREFIX,
-    DAG_END,
     Finding,
+    parse_front_matter,
     project_landing,
     project_supersede,
     resolve,
@@ -179,27 +179,19 @@ def _git_path(root: Path, change_id: str) -> Path:
     )
 
 
-def _roadmap_prose_output(text: str, source: str, archive: str) -> str:
-    def replace_lines(segment: str) -> str:
-        lines: list[str] = []
-        for line in segment.splitlines(keepends=True):
-            newline = "\n" if line.endswith("\n") else ""
-            content = line[:-1] if newline else line
-            if source in content:
-                content = content.replace(source, archive)
-                content = re.sub(r"\((?:proposed|in-progress|blocked)\)", "(landed)", content)
-            lines.append(content + newline)
-        return "".join(lines)
-
-    if DAG_BEGIN_PREFIX in text and DAG_END in text:
-        marker = text.index(DAG_BEGIN_PREFIX)
-        prefix = replace_lines(text[:marker])
-        return prefix + text[marker:]
-    raise LandingError("roadmap-invalid: generated DAG markers are missing")
-
-
-def _roadmap_output(text: str, block: str) -> str:
-    return text[: text.index(DAG_BEGIN_PREFIX)] + block + text[text.index(DAG_END) + len(DAG_END) :]
+def _found_node_document(folder: Path) -> str | None:
+    """The name of the node-bearing Markdown document in `folder` other than `change.md`,
+    used only to make the `change.md is missing` refusal name what was actually found."""
+    for path in sorted(folder.glob("*.md")):
+        if not path.is_file() or path.name == "change.md":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if parse_front_matter(text) is not None:
+            return path.name
+    return None
 
 
 def _diff_for(path: str, before: str, after: str) -> str:
@@ -264,10 +256,11 @@ def _plan_landing(
     tracking = selection.tracking
     change_file = source / "change.md"
     if not change_file.is_file():
-        raise LandingError("change-invalid: change.md is missing")
+        found = _found_node_document(source)
+        detail = f" (node document is {found})" if found else " (no node document found)"
+        raise LandingError(f"change-invalid: change.md is missing in {source_rel}{detail}")
     old_change = change_file.read_text(encoding="utf-8")
     current_roadmap = (root / settings.roadmap).read_text(encoding="utf-8")
-    planned_roadmap = _roadmap_prose_output(current_roadmap, source_rel, archive_rel)
     try:
         projection = project_landing(
             root,
@@ -277,7 +270,7 @@ def _plan_landing(
             archive_path=archive / "change.md",
             archive_relative=archive_rel,
             landed_at=day,
-            planned_roadmap_text=planned_roadmap,
+            roadmap_text=current_roadmap,
         )
     except ValueError as exc:
         raise LandingError(str(exc)) from None
@@ -297,7 +290,7 @@ def _plan_landing(
         mutations.append(Mutation("write", relative, None, _file_hash(document.path), _sha(new.encode()), new))
         diff_parts.append(_diff_for(relative, old, new))
 
-    roadmap_new = _roadmap_output(planned_roadmap, projection.roadmap_block)
+    roadmap_new = _roadmap_with_block(projection.roadmap_text, projection.roadmap_block)
     roadmap_path = root / settings.roadmap
     mutations.append(
         Mutation(
@@ -437,7 +430,9 @@ def _plan_supersede(
         raise LandingError("destination-collision: lineage record already exists")
     tracking = selection.tracking
     if not (source / "change.md").is_file():
-        raise LandingError("change-invalid: change.md is missing")
+        found = _found_node_document(source)
+        detail = f" (node document is {found})" if found else " (no node document found)"
+        raise LandingError(f"change-invalid: change.md is missing in {source_rel}{detail}")
     current_roadmap = (root / settings.roadmap).read_text(encoding="utf-8")
     try:
         projection = project_supersede(
@@ -458,7 +453,7 @@ def _plan_supersede(
             "preflight-invalid: planned repository state fails validation",
             findings=tuple(projection.resolution.errors),
         )
-    roadmap_new = _roadmap_output(projection.roadmap_text, projection.roadmap_block)
+    roadmap_new = _roadmap_with_block(projection.roadmap_text, projection.roadmap_block)
     # Removal executes before the roadmap rewrite and record creation is last, so no
     # interruption boundary can leave an unresolvable state; a mid-state resolve either
     # completes or fails closed with a value-free finding, never a traceback.

@@ -52,7 +52,7 @@ persistence: living
 - `docs/changes/proportional-accepted-work-contract/` (proposed) — make substantial accepted artifacts state requirements, exclusions, verification modes, and risk-triggered evidence or side-effect controls without adding runtime prose judgment; depends on accepted state and mechanical reconciliation
 - `docs/changes/archive/2026-10-15-review-bound-acceptance-plan/` (landed) — expose a versioned content-free acceptance manifest and bind reviewed dry-run scope to mutation through an apply-time expected plan identifier; depends on accepted state, mechanical reconciliation, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-10-14-supersede-unaccepted-proposal/` (landed) — add a packaged supersede transition that retires a never-accepted proposed change into a frozen lineage record instead of the forbidden manual `git mv`; depends on accepted state, the landed transactional archive command, and the frozen `docs/archive/` lineage discovery
-- `docs/changes/retirement-guards-and-roadmap-entry-locator/` (proposed) — give all three roadmap-prose rewriters one shared entry locator so landing can no longer retarget a prefix sibling's entry or flip another line's status, refuse a folder holding more than one change node rather than retiring its siblings silently, and document the one-node-per-folder and `change.md` conventions; depends on the landed supersede transition, roadmap-status canonicalization, and actionable lifecycle diagnostics
+- `docs/changes/archive/2026-10-21-retirement-guards-and-roadmap-entry-locator/` (landed) — give all three roadmap-prose rewriters one shared entry locator so landing can no longer retarget a prefix sibling's entry or flip another line's status, refuse a folder holding more than one change node rather than retiring its siblings silently, and document the one-node-per-folder and `change.md` conventions; depends on the landed supersede transition, roadmap-status canonicalization, and actionable lifecycle diagnostics
 - `docs/changes/archive/2026-07-30-mechanical-reconciliation/` (landed) — add a read-only packaged reconciliation report that reuses lifecycle and landing plans while leaving semantic judgment to the skill; depends on accepted state
 - `docs/changes/archive/2026-10-20-stamp-untracked-and-suspect-link-wording/` (landed) — give `stamp` the `--include-untracked` discovery opt-in the other graph-resolving verbs expose and make the `[suspect-link]` warning name the depender and the command that refreshes its fingerprint; depends on the landed discovery and lifecycle hardening
 
@@ -74,7 +74,7 @@ flowchart TD
     portable_install_contract_convergence["portable-install-contract-convergence (landed)"]
     proportional_accepted_work_contract["proportional-accepted-work-contract (proposed)"]
     reflect_project_evidence["reflect-project-evidence (landed)"]
-    retirement_guards_and_roadmap_entry_locator["retirement-guards-and-roadmap-entry-locator (proposed)"]
+    retirement_guards_and_roadmap_entry_locator["retirement-guards-and-roadmap-entry-locator (landed)"]
     reuse_document_discovery_for_secret_scanning["reuse-document-discovery-for-secret-scanning (landed)"]
     review_bound_acceptance_plan["review-bound-acceptance-plan (landed)"]
     runtime_source_provenance["runtime-source-provenance (proposed)"]

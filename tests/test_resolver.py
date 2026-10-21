@@ -450,8 +450,11 @@ def test_landing_projection_owns_rewrites_graph_and_validation(tmp_path: Path) -
     original = copy.deepcopy(resolution)
     archive = root / "docs/changes/archive/2026-07-24-source/change.md"
     roadmap = (
-        "- `docs/changes/archive/2026-07-24-source/` (landed)\n"
+        "- `docs/changes/source/` (proposed)\n"
         "- `docs/changes/active/` (proposed)\n"
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n"
+        "<!-- END GENERATED DAG -->\n"
     )
 
     projection = project_landing(
@@ -462,7 +465,7 @@ def test_landing_projection_owns_rewrites_graph_and_validation(tmp_path: Path) -
         archive_path=archive,
         archive_relative="docs/changes/archive/2026-07-24-source",
         landed_at="2026-07-24",
-        planned_roadmap_text=roadmap,
+        roadmap_text=roadmap,
     )
 
     projected = projection.resolution
@@ -480,6 +483,8 @@ def test_landing_projection_owns_rewrites_graph_and_validation(tmp_path: Path) -
     assert projected.topo_order.index("source") < projected.topo_order.index("active")
     assert 'source["source (landed)"]' in projection.roadmap_block
     assert "source --> active" in projection.roadmap_block
+    assert "- `docs/changes/archive/2026-07-24-source/` (landed)" in projection.roadmap_text
+    assert "docs/changes/source/" not in projection.roadmap_text
     assert not projected.errors
     assert resolution == original
     with pytest.raises(TypeError):
@@ -535,9 +540,12 @@ def test_landing_projection_reports_unknown_and_cyclic_graph(tmp_path: Path) -> 
         [],
     )
     roadmap = (
-        "- `docs/changes/archive/2026-07-24-source/` (landed)\n"
+        "- `docs/changes/source/` (proposed)\n"
         "- `docs/changes/first/` (proposed)\n"
         "- `docs/changes/second/` (proposed)\n"
+        "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+        "```mermaid\nflowchart TD\n```\n"
+        "<!-- END GENERATED DAG -->\n"
     )
 
     projection = project_landing(
@@ -548,7 +556,7 @@ def test_landing_projection_reports_unknown_and_cyclic_graph(tmp_path: Path) -> 
         archive_path=root / "docs/changes/archive/2026-07-24-source/change.md",
         archive_relative="docs/changes/archive/2026-07-24-source",
         landed_at="2026-07-24",
-        planned_roadmap_text=roadmap,
+        roadmap_text=roadmap,
     )
 
     by_code = {finding.code: finding for finding in projection.resolution.findings}
@@ -585,12 +593,7 @@ def test_landing_projection_matches_final_on_disk_resolution(tmp_path: Path) -> 
     resolution = resolve(root, settings)
     original = copy.deepcopy(resolution)
     archive = root / "docs/changes/archive/2026-07-24-source/change.md"
-    planned_roadmap = (
-        roadmap_header
-        + "- `docs/changes/archive/2026-07-24-source/` (landed)\n"
-        + "- `docs/changes/dependent/` (proposed)\n\n"
-        + generated
-    )
+    current_roadmap = (root / "docs/roadmap.md").read_text(encoding="utf-8")
 
     projection = project_landing(
         root,
@@ -600,7 +603,7 @@ def test_landing_projection_matches_final_on_disk_resolution(tmp_path: Path) -> 
         archive_path=archive,
         archive_relative="docs/changes/archive/2026-07-24-source",
         landed_at="2026-07-24",
-        planned_roadmap_text=planned_roadmap,
+        roadmap_text=current_roadmap,
     )
 
     archive.parent.mkdir(parents=True)
@@ -609,7 +612,7 @@ def test_landing_projection_matches_final_on_disk_resolution(tmp_path: Path) -> 
     source_path.parent.rmdir()
     dependent_path.write_text(projection.dependent_documents[0].content, encoding="utf-8")
     (root / "docs/roadmap.md").write_text(
-        planned_roadmap[: planned_roadmap.index("<!-- BEGIN GENERATED DAG")]
+        projection.roadmap_text[: projection.roadmap_text.index("<!-- BEGIN GENERATED DAG")]
         + projection.roadmap_block
         + "\n",
         encoding="utf-8",
@@ -764,21 +767,25 @@ def test_begin_canonicalizes_every_supported_accepted_presentation(
 
 
 @pytest.mark.parametrize(
-    "line",
+    ("line", "presentations"),
     [
-        f"{_OWN_LINE_PREFIX} — promote the resolver boundary",
-        f"{_OWN_LINE_PREFIX} (proposed — promote the resolver boundary",
-        f"{_OWN_LINE_PREFIX} (proposed) — was (proposed) before",
-        f"{_OWN_LINE_PREFIX} (proposed) proposed 2026-08-03",
-        f"{_OWN_LINE_PREFIX} (proposed 2026-08-03) — two overlapping presentations",
-        f"{_OWN_LINE_PREFIX} (proposed, ZYZZYVA-annotation — promote",
+        (f"{_OWN_LINE_PREFIX} — promote the resolver boundary", 0),
+        (f"{_OWN_LINE_PREFIX} (proposed — promote the resolver boundary", 0),
+        (f"{_OWN_LINE_PREFIX} (proposed) — was (proposed) before", 2),
+        (f"{_OWN_LINE_PREFIX} (proposed) proposed 2026-08-03", 2),
+        (f"{_OWN_LINE_PREFIX} (proposed 2026-08-03) — two overlapping presentations", 2),
+        (f"{_OWN_LINE_PREFIX} (proposed, ZYZZYVA-annotation — promote", 0),
     ],
 )
-def test_accept_rejects_a_located_line_it_cannot_rewrite_unambiguously(line: str) -> None:
+def test_accept_rejects_a_located_line_it_cannot_rewrite_unambiguously(
+    line: str, presentations: int
+) -> None:
     with pytest.raises(ValueError) as captured:
         _rewrite(_status_roadmap(line))
     message = str(captured.value)
-    assert message == "roadmap-invalid: unrewritable roadmap status for example"
+    assert message == (
+        f"roadmap-invalid: unrewritable roadmap status for example ({presentations} status presentations)"
+    )
     # Value-free: the detail is re-emitted verbatim as a reconciliation finding, so it carries
     # neither the line, the presentation, nor any annotation prose planted in the fixture.
     assert "ZYZZYVA" not in message
@@ -787,14 +794,16 @@ def test_accept_rejects_a_located_line_it_cannot_rewrite_unambiguously(line: str
 
 
 @pytest.mark.parametrize(
-    "line",
+    ("line", "presentations"),
     [
-        f"{_OWN_LINE_PREFIX} — start the resolver boundary",
-        f"{_OWN_LINE_PREFIX} accepted 2026-08-03 — start the resolver boundary",
-        f"{_OWN_LINE_PREFIX} (accepted) — was (accepted) before",
+        (f"{_OWN_LINE_PREFIX} — start the resolver boundary", 0),
+        (f"{_OWN_LINE_PREFIX} accepted 2026-08-03 — start the resolver boundary", 0),
+        (f"{_OWN_LINE_PREFIX} (accepted) — was (accepted) before", 2),
     ],
 )
-def test_begin_rejects_a_located_line_it_cannot_rewrite_unambiguously(line: str) -> None:
+def test_begin_rejects_a_located_line_it_cannot_rewrite_unambiguously(
+    line: str, presentations: int
+) -> None:
     with pytest.raises(ValueError) as captured:
         _rewrite(
             _status_roadmap(line),
@@ -802,7 +811,9 @@ def test_begin_rejects_a_located_line_it_cannot_rewrite_unambiguously(line: str)
             source_status="accepted",
             destination_status="in-progress",
         )
-    assert str(captured.value) == "roadmap-invalid: unrewritable roadmap status for example"
+    assert str(captured.value) == (
+        f"roadmap-invalid: unrewritable roadmap status for example ({presentations} status presentations)"
+    )
 
 
 def test_rejection_detail_is_distinct_for_an_ambiguous_multi_folder_line() -> None:
@@ -812,23 +823,28 @@ def test_rejection_detail_is_distinct_for_an_ambiguous_multi_folder_line() -> No
             _status_roadmap(shared),
             change_dirs={"docs/changes/example/", "docs/changes/other/"},
         )
-    assert str(captured.value) == "roadmap-invalid: ambiguous roadmap line for example"
+    assert str(captured.value) == (
+        "roadmap-invalid: cross-referenced roadmap entry for example "
+        "(1 candidate cites another change folder)"
+    )
 
     missing = "- `docs/changes/elsewhere/` (proposed) — promote"
     with pytest.raises(ValueError) as captured:
         _rewrite(_status_roadmap(missing))
-    assert str(captured.value) == "roadmap-invalid: no roadmap line for example"
+    assert str(captured.value) == "roadmap-invalid: no roadmap entry for example (0 candidates)"
 
 
 def test_a_line_naming_another_folder_never_donates_its_status_span() -> None:
     cross_ref = "- `docs/changes/other/` and `docs/changes/example/` (accepted) — cross ref"
     own = f"{_OWN_LINE_PREFIX} (proposed) — promote the resolver boundary"
     text = f"{_ROADMAP_HEADER}{cross_ref}\n{own}\n{_DAG_BLOCK}"
-    rewritten = _rewrite(text, change_dirs={"docs/changes/example/", "docs/changes/other/"})
-    assert cross_ref in rewritten
-    assert _own_lines(rewritten) == [
-        f"{_OWN_LINE_PREFIX} (accepted) — promote the resolver boundary"
-    ]
+    # The cross-reference line plus the own entry are now two candidates, so the rewriter
+    # refuses instead of silently donating the `(accepted)` presentation across folders.
+    with pytest.raises(ValueError) as captured:
+        _rewrite(text, change_dirs={"docs/changes/example/", "docs/changes/other/"})
+    assert str(captured.value) == (
+        "roadmap-invalid: ambiguous roadmap entry for example (2 candidates)"
+    )
 
 
 def test_rewrite_preserves_every_byte_outside_the_status_span() -> None:
@@ -867,7 +883,7 @@ def test_rewrite_never_selects_a_line_inside_the_generated_dag_region() -> None:
     dag_only = f"{_ROADMAP_HEADER}\n{dag}"
     with pytest.raises(ValueError) as captured:
         _rewrite(dag_only)
-    assert str(captured.value) == "roadmap-invalid: no roadmap line for example"
+    assert str(captured.value) == "roadmap-invalid: no roadmap entry for example (0 candidates)"
 
 
 def test_rewrite_preserves_line_terminators_blank_lines_and_a_final_unterminated_line() -> None:
@@ -878,13 +894,13 @@ def test_rewrite_preserves_line_terminators_blank_lines_and_a_final_unterminated
         "\r\n"
         f"{dag}"
         "\r\n"
-        f"{_OWN_LINE_PREFIX} tail without a terminator"
+        "- trailing note without a terminator"
     )
     rewritten = _rewrite(text)
     assert rewritten.count("\r\n") == text.count("\r\n")
     assert "\n" not in rewritten.replace("\r\n", "")
     assert not rewritten.endswith(("\n", "\r"))
-    assert rewritten.endswith(f"{_OWN_LINE_PREFIX} tail without a terminator")
+    assert rewritten.endswith("- trailing note without a terminator")
     assert f"{_OWN_LINE_PREFIX} (accepted) — promote\r\n" in rewritten
     assert rewritten.replace("(accepted)", "(proposed)", 1) == text
 
@@ -1360,7 +1376,7 @@ def test_project_supersede_fails_closed_without_a_roadmap_entry(tmp_path: Path) 
     settings = _settings(root)
     result = _supersede_resolution(root)
 
-    with pytest.raises(ValueError, match="roadmap-invalid: no roadmap line for gone"):
+    with pytest.raises(ValueError, match="roadmap-invalid: no roadmap entry for gone \\(0 candidates\\)"):
         project_supersede(
             root,
             settings,
@@ -1378,3 +1394,284 @@ def test_change_status_set_stays_closed(tmp_path: Path) -> None:
     assert resolver_module.CHANGE_STATUSES == frozenset(
         {"proposed", "accepted", "in-progress", "blocked", "landed"}
     )
+
+
+# ---------------------------------------------------------------- shared roadmap-entry locator
+#
+# accept/begin (`_roadmap_transition_text`), supersede (`_roadmap_supersede_text`), and land
+# (`_roadmap_landing_text`) share one entry locator. These tests pin that the three policies
+# differ only in what they substitute, never in what they accept or refuse, and that each
+# refusal is a distinct, counted, value-free `roadmap-invalid` detail.
+
+
+def _supersede_rewrite(
+    text: str,
+    *,
+    node_id: str = "example",
+    source_status: str = "proposed",
+    needle: str = "docs/changes/example/",
+    replacement: str = "docs/archive/example.md",
+    change_dirs: set[str] | None = None,
+) -> str:
+    return resolver_module._roadmap_supersede_text(
+        text,
+        needle=needle,
+        replacement=replacement,
+        source_status=source_status,
+        change_dirs={"docs/changes/example/"} if change_dirs is None else change_dirs,
+        node_id=node_id,
+    )
+
+
+def _landing_rewrite(
+    text: str,
+    *,
+    node_id: str = "example",
+    source_status: str = "proposed",
+    needle: str = "docs/changes/example/",
+    replacement: str = "docs/changes/archive/2026-01-01-example/",
+    change_dirs: set[str] | None = None,
+) -> str:
+    return resolver_module._roadmap_landing_text(
+        text,
+        needle=needle,
+        replacement=replacement,
+        source_status=source_status,
+        change_dirs={"docs/changes/example/"} if change_dirs is None else change_dirs,
+        node_id=node_id,
+    )
+
+
+def _assert_all_rewriters_refuse(
+    text: str, detail: str, change_dirs: set[str] | None = None
+) -> None:
+    with pytest.raises(ValueError) as captured:
+        _rewrite(text, change_dirs=change_dirs)
+    assert str(captured.value) == detail
+    with pytest.raises(ValueError) as captured:
+        _supersede_rewrite(text, change_dirs=change_dirs)
+    assert str(captured.value) == detail
+    with pytest.raises(ValueError) as captured:
+        _landing_rewrite(text, change_dirs=change_dirs)
+    assert str(captured.value) == detail
+
+
+@pytest.mark.parametrize(
+    ("presentation", "expected"),
+    [
+        ("(proposed)", "(accepted)"),
+        ("(PROPOSED)", "(accepted)"),
+        ("(Proposed, not accepted)", "(accepted)"),
+    ],
+)
+def test_case_varied_citation_counts_as_a_candidate_for_every_caller(
+    presentation: str, expected: str
+) -> None:
+    line = f"- `docs/changes/EXAMPLE/` {presentation} — promote"
+    text = _status_roadmap(line)
+    assert f"- `docs/changes/EXAMPLE/` {expected} — promote\n" in _rewrite(text)
+    assert "- `docs/archive/example.md` (superseded) — promote" in _supersede_rewrite(text)
+    assert (
+        "- `docs/changes/archive/2026-01-01-example/` (landed) — promote"
+        in _landing_rewrite(text)
+    )
+
+
+def test_all_rewriters_share_the_four_counted_refusals() -> None:
+    _assert_all_rewriters_refuse(
+        _status_roadmap("- `docs/changes/elsewhere/` (proposed) — elsewhere"),
+        "roadmap-invalid: no roadmap entry for example (0 candidates)",
+    )
+
+    duplicated = (
+        _ROADMAP_HEADER
+        + f"{_OWN_LINE_PREFIX} (proposed) — first\n"
+        + f"{_OWN_LINE_PREFIX} (proposed) — second\n"
+        + _DAG_BLOCK
+    )
+    _assert_all_rewriters_refuse(
+        duplicated,
+        "roadmap-invalid: ambiguous roadmap entry for example (2 candidates)",
+    )
+
+    cross_ref = f"{_OWN_LINE_PREFIX} and `docs/changes/other/` (proposed) — cross ref"
+    _assert_all_rewriters_refuse(
+        _status_roadmap(cross_ref),
+        "roadmap-invalid: cross-referenced roadmap entry for example "
+        "(1 candidate cites another change folder)",
+        change_dirs={"docs/changes/example/", "docs/changes/other/"},
+    )
+
+    statusless = _status_roadmap(f"{_OWN_LINE_PREFIX} — no status")
+    _assert_all_rewriters_refuse(
+        statusless,
+        "roadmap-invalid: unrewritable roadmap status for example (0 status presentations)",
+    )
+
+
+def test_cross_folder_ambiguity_is_judged_over_the_whole_entry_block() -> None:
+    text = (
+        _ROADMAP_HEADER
+        + f"{_OWN_LINE_PREFIX} (proposed) — rationale\n"
+        + "  cites `docs/changes/other/` in its continuation\n"
+        + _DAG_BLOCK
+    )
+    detail = (
+        "roadmap-invalid: cross-referenced roadmap entry for example "
+        "(1 candidate cites another change folder)"
+    )
+    with pytest.raises(ValueError) as captured:
+        _rewrite(text, change_dirs={"docs/changes/example/", "docs/changes/other/"})
+    assert str(captured.value) == detail
+
+
+def test_accept_and_begin_refuse_a_duplicated_or_cross_referenced_entry() -> None:
+    duplicated = (
+        _ROADMAP_HEADER
+        + f"{_OWN_LINE_PREFIX} (proposed) — first\n"
+        + f"{_OWN_LINE_PREFIX} (proposed) — second\n"
+        + _DAG_BLOCK
+    )
+    with pytest.raises(ValueError) as captured:
+        _rewrite(duplicated)
+    assert str(captured.value) == (
+        "roadmap-invalid: ambiguous roadmap entry for example (2 candidates)"
+    )
+
+    cross_ref = f"{_OWN_LINE_PREFIX} and `docs/changes/other/` (proposed) — cross ref"
+    with pytest.raises(ValueError) as captured:
+        _rewrite(
+            _status_roadmap(cross_ref),
+            change_dirs={"docs/changes/example/", "docs/changes/other/"},
+        )
+    assert str(captured.value) == (
+        "roadmap-invalid: cross-referenced roadmap entry for example "
+        "(1 candidate cites another change folder)"
+    )
+
+
+def test_supersede_accepts_an_entry_whose_continuation_cites_the_folder() -> None:
+    text = (
+        _ROADMAP_HEADER
+        + f"{_OWN_LINE_PREFIX} (proposed) — retire the never-accepted\n"
+        + "  proposal (see docs/changes/example/ for context)\n"
+        + _DAG_BLOCK
+    )
+    rewritten = _supersede_rewrite(text)
+    assert (
+        "- `docs/archive/example.md` (superseded) — retire the never-accepted\n"
+        "  proposal (see docs/archive/example.md for context)\n"
+    ) in rewritten
+    assert "docs/changes/example/" not in rewritten
+
+
+def test_landing_retarget_canonicalizes_case_varied_and_annotated_presentations() -> None:
+    for presentation in ("(PROPOSED)", "(proposed, depends on x)", "proposed 2026-08-03"):
+        line = f"{_OWN_LINE_PREFIX} {presentation} — rationale"
+        rewritten = _landing_rewrite(_status_roadmap(line))
+        assert (
+            "- `docs/changes/archive/2026-01-01-example/` (landed) — rationale\n"
+        ) in rewritten
+
+
+def test_supersede_retarget_canonicalizes_case_varied_and_annotated_presentations() -> None:
+    for presentation in ("(PROPOSED)", "(proposed, depends on x)", "proposed 2026-08-03"):
+        line = f"{_OWN_LINE_PREFIX} {presentation} — rationale"
+        rewritten = _supersede_rewrite(_status_roadmap(line))
+        assert "- `docs/archive/example.md` (superseded) — rationale\n" in rewritten
+
+
+def test_landing_refuses_a_post_generated_region_only_entry() -> None:
+    text = (
+        _ROADMAP_HEADER
+        + "\n"
+        + _DAG_BLOCK
+        + f"{_OWN_LINE_PREFIX} (proposed) — only after the generated block\n"
+    )
+    with pytest.raises(ValueError) as captured:
+        _landing_rewrite(text)
+    assert str(captured.value) == (
+        "roadmap-invalid: roadmap entry for example is after the generated DAG region "
+        "(1 candidate after the generated region)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("rewriter", "input_line", "expected_line"),
+    [
+        (
+            lambda text: _rewrite(text),
+            f"{_OWN_LINE_PREFIX} (proposed)",
+            f"{_OWN_LINE_PREFIX} (accepted) — only after the generated block\n",
+        ),
+        (
+            lambda text: _rewrite(
+                text,
+                node=_status_node(status="accepted"),
+                source_status="accepted",
+                destination_status="in-progress",
+            ),
+            f"{_OWN_LINE_PREFIX} (accepted)",
+            f"{_OWN_LINE_PREFIX} (in-progress) — only after the generated block\n",
+        ),
+        (
+            lambda text: _supersede_rewrite(text),
+            f"{_OWN_LINE_PREFIX} (proposed)",
+            "- `docs/archive/example.md` (superseded) — only after the generated block\n",
+        ),
+    ],
+)
+def test_accept_begin_and_supersede_still_rewrite_a_post_generated_region_only_entry(
+    rewriter, input_line: str, expected_line: str
+) -> None:
+    text = (
+        _ROADMAP_HEADER
+        + "\n"
+        + _DAG_BLOCK
+        + f"{input_line} — only after the generated block\n"
+    )
+    rewritten = rewriter(text)
+    assert "<!-- BEGIN GENERATED DAG" in rewritten
+    assert expected_line in rewritten
+
+
+def test_landing_retarget_preserves_rationale_continuation_and_terminator() -> None:
+    dag = _DAG_BLOCK.replace("\n", "\r\n")
+    text = (
+        "---\r\npersistence: living\r\n---\r\n# Roadmap\r\n\r\n"
+        f"{_OWN_LINE_PREFIX} (proposed) — rationale\r\n"
+        "  wrapped continuation\r\n"
+        "\r\n"
+        f"{dag}"
+    )
+    rewritten = _landing_rewrite(text)
+    assert rewritten.count("\r\n") == text.count("\r\n")
+    assert "  wrapped continuation\r\n" in rewritten
+    assert (
+        "- `docs/changes/archive/2026-01-01-example/` (landed) — rationale\r\n"
+    ) in rewritten
+    assert rewritten[rewritten.index("<!-- BEGIN GENERATED DAG") :] == dag
+
+
+def test_multi_node_change_folder_warns_and_keeps_the_graph_unchanged(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _write(
+        root,
+        "docs/roadmap.md",
+        _roadmap("multi")
+        + "- `docs/changes/multi/fix-b.md` (proposed) — sibling\n",
+    )
+    _write(root, "docs/changes/multi/change.md", _change("multi"))
+    _write(
+        root,
+        "docs/changes/multi/fix-b.md",
+        "---\nid: fix-b\npersistence: ephemeral\nstatus: proposed\ntrack: test\n---\n# fix-b\n",
+    )
+    result = resolve(root, _settings(root))
+    warnings = [f for f in result.warnings if f.code == "multi-node-change-folder"]
+    assert len(warnings) == 1
+    assert warnings[0].subjects == ("fix-b", "multi")
+    assert "docs/changes/multi/" in warnings[0].message
+    assert "2 change nodes" in warnings[0].message
+    assert "multi-node-change-folder" not in {f.code for f in result.errors}
+    assert set(result.nodes) == {"roadmap", "multi", "fix-b"}

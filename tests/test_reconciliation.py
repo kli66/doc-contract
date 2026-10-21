@@ -536,6 +536,34 @@ def test_archive_collision_and_partial_tracking_are_typed_blockers(tmp_path: Pat
     assert "partial-tracking" in {finding.code for finding in partial.findings}
 
 
+def test_exit_reports_a_multi_node_folder_refusal(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(
+        root,
+        "docs/changes/transactional/fix-b.md",
+        "---\nid: fix-b\npersistence: ephemeral\nstatus: in-progress\ntrack: test\n"
+        "---\n# fix-b\n",
+    )
+    roadmap = root / "docs/roadmap.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8").replace(
+            "- `docs/changes/transactional/` (in-progress)\n",
+            "- `docs/changes/transactional/` (in-progress)\n"
+            "- `docs/changes/transactional/fix-b.md` (in-progress) — sibling\n",
+        ),
+        encoding="utf-8",
+    )
+    report = reconcile_mechanical(
+        root,
+        _settings(root),
+        "transactional",
+        phase="exit",
+        include_untracked=True,
+    )
+    assert not report.ready
+    assert "change-multi-node-folder" in {finding.code for finding in report.findings}
+
+
 def test_unrelated_warning_is_rendered_individually_and_retained_in_json(
     tmp_path: Path,
 ) -> None:

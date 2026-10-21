@@ -15,7 +15,10 @@ intentionally not an executable CLI command; it will not appear in `doc-contract
 Resolve and validate the document graph, required repository boundary, frozen-document hashes, and value-free secret scan. One ordered managed-document discovery result supplies both graph validation and scanning; repository source, `.env`, generated output, dependency trees, and checked-out submodules are not separate scan inputs. The shared verification boundary runs the configured project capability command unless `--offline` is selected; target project modules are never imported into the resolver process.
 Discovery is tracked/declared by default and includes companion Markdown inside selected change folders. `--include-untracked` previews and includes provisional nodes in both validation and scanning, and warning output separates the tolerated baseline from newly introduced findings.
 Dependency topology is mandatory; edge review hashes are advisory unless the manifest selects
-`edge_fingerprints = "required"`. Frozen-document `self_hash` validation is always strict.
+`edge_fingerprints = "required"`. Frozen-document `self_hash` validation is always strict. A change
+folder holding more than one node-bearing document reports a `multi-node-change-folder` WARN naming
+the folder and the count: the layout stays legal for roadmap linkage, but `land` and `supersede`
+refuse it.
 
 ### `update`
 
@@ -39,8 +42,10 @@ One validated plan atomically canonicalizes the selected roadmap status presenta
 the change metadata, the generated DAG state, and the affected dependent fingerprints. The
 recognized source-status presentation is replaced wholesale by `(accepted)`, so an in-presentation
 annotation such as `depends on …` or `not accepted` is dropped while the change reference and the
-surrounding rationale are preserved byte-for-byte. A located roadmap line whose status has no
-single unambiguous rewritable presentation is rejected as `roadmap-invalid` during planning, before
+surrounding rationale are preserved byte-for-byte. A located roadmap entry — the line citing the
+change folder plus its indented continuations — must carry exactly one rewritable status
+presentation across the whole block; a missing, duplicated, cross-referenced, statusless, or
+unclosed entry is rejected as a counted value-free `roadmap-invalid` during planning, before
 projected repository validation and before any mutation.
 
 `--format {text,json}` selects the output format. The default `text` produces the existing
@@ -91,8 +96,10 @@ The same atomic plan canonicalizes the selected roadmap status presentation toge
 change metadata, the generated DAG state, and the affected dependent fingerprints, replacing the
 recognized accepted presentation wholesale with `(in-progress)`. In-presentation annotations are
 dropped while the change reference and the surrounding rationale are preserved byte-for-byte, and a
-located roadmap line without a single unambiguous rewritable presentation is rejected as
-`roadmap-invalid` during planning, before projected repository validation and before any mutation.
+located roadmap entry — the line citing the change folder plus its indented continuations —
+that lacks exactly one rewritable status presentation across the whole block is rejected as a
+counted value-free `roadmap-invalid` during planning, before projected repository validation and
+before any mutation.
 
 ### `reconcile`
 
@@ -122,7 +129,7 @@ and repeating the command without a package change does not rewrite files.
 
 ### `land`
 
-Plan and apply a hash-guarded, resumable change landing. The default plan is a compact, deterministic scope review: it identifies the source, archive, tracking mode, provisional nodes, warning count, write/move totals, and every ordered mutation path without printing document content or transaction hashes. `--diff` appends the planner's complete patch to the same summary for line-level review; it changes presentation only. A dry run prints the value-free preflight warning details because no post-mutation warning report follows. Landing journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. New private journals retain the complete diff across resume; older journals remain resumable and report that the historical diff is unavailable when `--diff` is requested. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`, and the outcome reports baseline, new, and resolved warning counts. A landing blocked by a `LandingError` reports the failure under its stable code (never relabelled as a transaction type) and prints each attached resolver finding with its code, message, and node-id subjects. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op. The private journal representation is not a public JSON output contract.
+Plan and apply a hash-guarded, resumable change landing. The default plan is a compact, deterministic scope review: it identifies the source, archive, tracking mode, provisional nodes, warning count, write/move totals, and every ordered mutation path without printing document content or transaction hashes. `--diff` appends the planner's complete patch to the same summary for line-level review; it changes presentation only. A dry run prints the value-free preflight warning details because no post-mutation warning report follows. Landing journals progress in Git metadata, updates the roadmap and dependent fingerprints, and archives tracked or intentionally untracked change folders atomically. New private journals retain the complete diff across resume; older journals remain resumable and report that the historical diff is unavailable when `--diff` is requested. A completed landing is an idempotent no-op. Intentionally untracked work requires `--include-untracked`, and the outcome reports baseline, new, and resolved warning counts. A landing blocked by a `LandingError` reports the failure under its stable code (never relabelled as a transaction type) and prints each attached resolver finding with its code, message, and node-id subjects. Landing continues to refresh advisory dependent fingerprints without treating their prior absence as an invalid preflight. Before projected validation, `land` locates the change's roadmap entry with the same counted `roadmap-invalid` guard as `accept`, `begin`, and `supersede`, and refuses a missing, duplicated, cross-referenced, statusless, or unclosed entry, plus an entry whose only location is after the generated DAG region. The documented entry convention follows: one entry per active change — a pre-DAG line plus its indented continuations — cites its folder path, with exactly one status presentation across the whole block. Like `supersede`, `land` refuses a folder holding more than one node-bearing change document. Final verification uses the same capability execution and finding vocabulary as `check`; it runs after all mutations, retains the journal on offline or live failure, and does not run for `--dry-run` or an already-landed no-op. The private journal representation is not a public JSON output contract.
 
 ### `supersede`
 
@@ -132,14 +139,17 @@ body; it never appears in CLI output. The transition removes the active `docs/ch
 retargets its roadmap prose line to `docs/archive/<name>.md` with `(superseded)`, regenerates the
 generated DAG, and creates the frozen record last (staged in the Git index for tracked plans) —
 removal first, record creation last, so every interruption boundary is resolvable or fails closed.
-It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, and refuses while any active
-node still `depends_on` the retired id; a preflight-blocking `LandingError` is reported under its
+It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, refuses while any active
+node still `depends_on` the retired id, and refuses a folder holding more than one node-bearing
+change document; a preflight-blocking `LandingError` is reported under its
 stable code with each attached resolver finding's code, message, and node-id subjects, never
-relabelled as a transaction type. `--dry-run` prints a value-free plan summary and mutates
-nothing; `--include-untracked` governs provisional work. A `roadmap-line-dangling` ERROR blocks the
-manual `git rm` path that this verb replaces. The record carries `persistence: frozen`, a strict
-`self_hash`, and an inert `status: superseded` scalar that no resolver path consumes as a change
-status.
+relabelled as a transaction type. The roadmap entry is retargeted with the same counted
+`roadmap-invalid` guard as `accept`/`begin`/`land`: a missing, duplicated, cross-referenced,
+statusless, or unclosed entry fails closed before any mutation. `--dry-run` prints a value-free plan
+summary and mutates nothing; `--include-untracked` governs provisional work. A
+`roadmap-line-dangling` ERROR blocks the manual `git rm` path that this verb replaces. The record
+carries `persistence: frozen`, a strict `self_hash`, and an inert `status: superseded` scalar that
+no resolver path consumes as a change status.
 
 ### `reflect`
 
@@ -169,10 +179,11 @@ schema-1 JSON preserve the same code, message, and nullable next command.
 | `change-front-matter-invalid` | selected front matter is malformed, ambiguous, or lacks valid identity/status | none |
 | `change-ref-wrong-folder` | a path-shaped reference is not an exact contained active/archive folder | none |
 | `change-ref-unknown` | no active candidate or valid archive lineage matches | none |
+| `change-multi-node-folder` | `land` or `supersede` requested a folder holding more than one change node | none |
 
 Messages contain only normalized change ID, repository-relative path, canonical lifecycle status,
-and `gate_present=true|false`; they never include raw input, front matter, parser fragments, body
-content, gate text, environment values, or subprocess output. Repeated `land` emits
+node count, and `gate_present=true|false`; they never include raw input, front matter, parser
+fragments, body content, gate text, environment values, or subprocess output. Repeated `land` emits
 `INFO: [change-already-landed]` and exits `0`. Every classified blocker emits
 `ERROR: [<stable-code>]` and exits `1`; argparse and configuration failures alone use exit `2`.
 

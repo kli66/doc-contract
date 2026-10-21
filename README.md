@@ -254,19 +254,30 @@ commit; acceptance remains logically prior to implementation, and the runtime ne
 commits Git changes.
 
 `land` accepts only `in-progress` changes, previews and then atomically applies the status, dependent fingerprints, roadmap, and archive
-move; advisory hashes are refreshed but are not landing prerequisites. Rerunning a completed landing
-returns success without changing files or the Git index. Interrupted landings resume from the
-journal under Git metadata, and concurrent edits fail closed.
+move; advisory hashes are refreshed but are not landing prerequisites. Before projected validation
+`land` locates the change's roadmap entry with the same counted `roadmap-invalid` guard as `accept`,
+`begin`, and `supersede` — refusing a missing, duplicated, cross-referenced, statusless, or unclosed
+entry, plus an entry whose only location is after the generated DAG region. The documented entry
+convention follows: one entry per active change, a pre-DAG line plus its indented continuations,
+cites the folder path with exactly one status presentation across the whole block. The retirement
+verbs act on one change node per folder, and `land`/`supersede` require the folder's node document
+to be `change.md`. Rerunning a completed landing returns success without changing files or the Git
+index. Interrupted landings resume from the journal under Git metadata, and concurrent edits fail
+closed.
 
 `supersede` retires a never-accepted `proposed` change into a frozen `docs/archive/<name>.md` record
 in one resumable, dry-runnable transaction. It requires `--reason` (recorded verbatim in the record
 body, never echoed in output), removes the active folder, retargets its roadmap line to the record
 path with `(superseded)`, regenerates the DAG, and creates the record last (staged for tracked
-plans). It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, and refuses while an
-active node still depends on the retired id. The record keeps the retired `id`, declares
-`persistence: frozen`, records `superseded_at` and a strict `self_hash`, and carries an inert
-`status: superseded` scalar. `doc-contract check` reports a `roadmap-line-dangling` ERROR when a
-folder vanishes without a lineage record, so the manual `git rm` path fails loudly.
+plans). It refuses `accepted`, `in-progress`, `blocked`, and `landed` changes, refuses while an
+active node still depends on the retired id, and refuses a folder holding more than one node-bearing
+change document. Its roadmap entry retarget uses the same counted `roadmap-invalid` guard, failing
+closed on a missing, duplicated, cross-referenced, statusless, or unclosed entry before any
+mutation. The record keeps the retired `id`, declares `persistence: frozen`, records `superseded_at`
+and a strict `self_hash`, and carries an inert `status: superseded` scalar. `doc-contract check`
+reports a `roadmap-line-dangling` ERROR when a folder vanishes without a lineage record, and a
+`multi-node-change-folder` WARN naming the folder and count when a folder holds more than one change
+node, so the manual `git rm` path fails loudly.
 
 Landing output is compact by default: the plan prints source/archive/tracking facts, provisional
 nodes, warning count, mutation type totals, and every ordered write/move path, but no content patch
@@ -286,8 +297,9 @@ knowledge are true before an explicit `begin` or `land` command.
 Lifecycle callers classify the selected reference before whole-repository preflight and share these
 stable codes: `change-proposed-unaccepted`, `change-accepted-not-started`, `change-not-proposed`,
 `change-blocked`, `change-already-landed`, `change-untracked-excluded`, `change-front-matter-missing`,
-`change-front-matter-invalid`, `change-ref-wrong-folder`, and `change-ref-unknown`. Diagnostics contain
-only normalized IDs, repository-relative paths, canonical status, and `gate_present=true|false`.
+`change-front-matter-invalid`, `change-ref-wrong-folder`, `change-ref-unknown`, and
+`change-multi-node-folder`. Diagnostics contain only normalized IDs, repository-relative paths,
+canonical status, node counts, and `gate_present=true|false`.
 Proposed and accepted blockers point to dry-run `accept` or `begin`; excluded untracked work replays
 the same normalized command with `--include-untracked`. Blocked, invalid, wrong-folder, unknown, and
 already-landed states never invent a next command. Repeated `land` reports

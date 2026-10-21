@@ -47,7 +47,10 @@ live map:
   `docs/changes/<name>/` folder, **single `change.md`** (the default). Continue to step 2.
 - **Rare meta-change** (each of Why/What/Tasks is genuinely large) → split into
   `proposal.md` / `design.md` / `tasks.md`. This is the *ceiling*, not the default — justify the
-  split before reaching for it.
+  split before reaching for it. Note the retirement verbs (`land` and `supersede`) accept a single
+  `change.md` node only: a split folder cannot be retired by them until its sections are collapsed
+  back into `change.md`, and a folder holding more than one node-bearing document is refused
+  outright.
 
 When unsure between trivial and substantial, default to substantial-but-minimal: a folder with a
 short `change.md` beats a roadmap line that loses the dependency detail.

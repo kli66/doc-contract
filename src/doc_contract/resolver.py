@@ -361,6 +361,7 @@ class LandingProjection:
     dependent_documents: tuple[ProjectedDocument, ...]
     resolution: ProjectedResolution
     roadmap_block: str
+    roadmap_text: str
 
     @property
     def findings(self) -> tuple[Finding, ...]:
@@ -984,6 +985,27 @@ def validate(
                 )
             )
 
+    # Multi-node change folder (WARN): the roadmap linkage supports a folder holding several
+    # node-bearing documents (its `_has_roadmap_line` matches the per-document basename), so the
+    # layout stays legal for the graph — but `land` and `supersede` retire whole folders and
+    # therefore refuse it. Surface the layout before an operator tries to retire it.
+    folder_members: dict[str, list[str]] = {}
+    for n in sorted(nodes.values(), key=lambda x: x.id):
+        if not n.active:
+            continue
+        folder = f"docs/changes/{n.path.parent.name}/"
+        folder_members.setdefault(folder, []).append(n.id)
+    for folder, members in sorted(folder_members.items()):
+        if len(members) > 1:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "multi-node-change-folder",
+                    f"{folder} holds {len(members)} change nodes; land and supersede refuse a multi-node folder",
+                    tuple(sorted(members)),
+                )
+            )
+
     # Cycle (WARN).
     if cycle:
         findings.append(
@@ -1271,6 +1293,99 @@ def _generated_dag_range(lines: list[str]) -> range:
     return range(begin, end + 1)
 
 
+def _locate_roadmap_entry(
+    text: str,
+    *,
+    needle: str,
+    other_dirs: set[str],
+    node_id: str,
+) -> tuple[int, int]:
+    """Locate exactly one roadmap prose entry for `needle`, failing closed with a distinct,
+    counted, value-free `roadmap-invalid` detail otherwise.
+
+    The grammar is one rule, shared by all three rewriters: case-insensitive needle match over
+    every non-generated prose line; the generated DAG region (begin marker through end marker,
+    inclusive) is machine-owned and never scanned; a candidate is an eligible line that carries
+    the needle with its indented continuation block attached; and cross-folder ambiguity is
+    judged over the whole entry block, never only the head line. Zero candidates, more than one
+    candidate, and a sole candidate that also cites another change folder each fail closed here.
+    """
+    if DAG_BEGIN_PREFIX not in text or DAG_END not in text:
+        raise ValueError("roadmap-invalid: generated DAG markers are missing")
+    lines = text.splitlines(keepends=True)
+    generated = _generated_dag_range(lines)
+    needle_lower = needle.lower()
+    candidates: list[int] = []
+    index = 0
+    while index < len(lines):
+        if index in generated or needle_lower not in lines[index].lower():
+            index += 1
+            continue
+        candidates.append(index)
+        # Attach the indented continuation block so a needle carried by a continuation line
+        # is part of the same entry, never a second candidate.
+        index += 1
+        while (
+            index < len(lines)
+            and index not in generated
+            and lines[index].strip()
+            and lines[index][:1].isspace()
+        ):
+            index += 1
+    if not candidates:
+        raise ValueError(f"roadmap-invalid: no roadmap entry for {node_id} (0 candidates)")
+    if len(candidates) > 1:
+        raise ValueError(
+            f"roadmap-invalid: ambiguous roadmap entry for {node_id} "
+            f"({len(candidates)} candidates)"
+        )
+    start = candidates[0]
+    end = start
+    while (
+        end + 1 < len(lines)
+        and end + 1 not in generated
+        and lines[end + 1].strip()
+        and lines[end + 1][:1].isspace()
+    ):
+        end += 1
+    block_lower = "".join(lines[start : end + 1]).lower()
+    if any(other.lower() in block_lower for other in other_dirs):
+        raise ValueError(
+            f"roadmap-invalid: cross-referenced roadmap entry for {node_id} "
+            "(1 candidate cites another change folder)"
+        )
+    return start, end
+
+
+def _locate_roadmap_status_span(
+    lines: list[str],
+    start: int,
+    end: int,
+    tokens: tuple[str, ...],
+    node_id: str,
+) -> tuple[int, int, int]:
+    """Return ``(line_index, span_start, span_end)`` of the single source-status presentation
+    across the located entry block, or fail closed with a counted value-free detail when the
+    block does not hold exactly one rewritable presentation (statusless, unclosed, or several).
+    """
+    spans: list[tuple[int, int, int]] = []
+    for index in range(start, end + 1):
+        for span_start, span_end in _status_spans(lines[index], tokens):
+            spans.append((index, span_start, span_end))
+    if len(spans) != 1:
+        raise ValueError(
+            f"roadmap-invalid: unrewritable roadmap status for {node_id} "
+            f"({len(spans)} status presentations)"
+        )
+    return spans[0]
+
+
+def _replace_needle(line: str, needle: str, replacement: str) -> str:
+    """Replace every case-insensitive occurrence of `needle`, preserving every other byte and
+    computing offsets against the original line (never a lowercased copy)."""
+    return re.sub(re.escape(needle), lambda _match: replacement, line, flags=re.IGNORECASE)
+
+
 def _roadmap_transition_text(
     text: str,
     *,
@@ -1279,48 +1394,36 @@ def _roadmap_transition_text(
     destination_status: str,
     change_dirs: set[str],
 ) -> str:
-    """Rewrite the selected roadmap line's source-status presentation to the canonical
+    """Rewrite the located roadmap entry's source-status presentation to the canonical
     destination token, preserving every byte outside that presentation (change reference,
     em-dash rationale, trailing whitespace, line terminator) and every other line.
 
-    A located line is rewritten only when exactly one candidate presentation span exists and
-    the substitution changed bytes; a statusless, unclosed, or ambiguous line fails closed
-    here — before projected validation — with a value-free `roadmap-invalid` detail, because
-    the same string is re-emitted verbatim as a reconciliation finding.
+    The entry is located by the shared locator and must hold exactly one rewritable status
+    presentation; a statusless, unclosed, duplicated, cross-referenced, or ambiguous entry
+    fails closed here — before projected validation — with a value-free `roadmap-invalid`
+    detail, because the same string is re-emitted verbatim as a reconciliation finding.
     """
-    if DAG_BEGIN_PREFIX not in text or DAG_END not in text:
-        raise ValueError("roadmap-invalid: generated DAG markers are missing")
     own_dir = f"docs/changes/{node.path.parent.name}/"
-    specific = _specific_needle(node).lower()
-    tokens = _status_source_tokens(source_status)
     lines = text.splitlines(keepends=True)
-    generated = _generated_dag_range(lines)
-    ambiguous = False
-    for index, line in enumerate(lines):
-        if index in generated:
-            continue
-        low = line.lower()
-        if specific not in low:
-            continue
-        if any(other.lower() in low for other in change_dirs - {own_dir}):
-            ambiguous = True
-            continue
-        spans = _status_spans(line, tokens)
-        rewritten: str | None = None
-        if len(spans) == 1:
-            start, end = spans[0]
-            candidate = line[:start] + f"({destination_status})" + line[end:]
-            if candidate != line:
-                rewritten = candidate
-        if rewritten is None:
-            # Zero or several candidate presentations, or a substitution that changed no bytes:
-            # never record a match without an actual rewrite.
-            raise ValueError(f"roadmap-invalid: unrewritable roadmap status for {node.id}")
-        lines[index] = rewritten
-        return "".join(lines)
-    if ambiguous:
-        raise ValueError(f"roadmap-invalid: ambiguous roadmap line for {node.id}")
-    raise ValueError(f"roadmap-invalid: no roadmap line for {node.id}")
+    start, end = _locate_roadmap_entry(
+        text,
+        needle=_specific_needle(node),
+        other_dirs=change_dirs - {own_dir},
+        node_id=node.id,
+    )
+    span_index, span_start, span_end = _locate_roadmap_status_span(
+        lines,
+        start,
+        end,
+        _status_source_tokens(source_status),
+        node.id,
+    )
+    lines[span_index] = (
+        lines[span_index][:span_start]
+        + f"({destination_status})"
+        + lines[span_index][span_end:]
+    )
+    return "".join(lines)
 
 
 def _projected_resolution(result: Resolution) -> ProjectedResolution:
@@ -1358,9 +1461,13 @@ def project_landing(
     archive_path: Path,
     archive_relative: str,
     landed_at: str,
-    planned_roadmap_text: str,
+    roadmap_text: str,
 ) -> LandingProjection:
-    """Project one complete landed document-graph state without mutating caller-owned input."""
+    """Project one complete landed document-graph state without mutating caller-owned input.
+
+    The rewritten roadmap prose is derived here from the current text (before projected
+    validation), so the landing locator and placement precondition run on the original prose.
+    """
     nodes = copy.deepcopy(result.nodes)
     try:
         change = nodes[change_id]
@@ -1369,6 +1476,8 @@ def project_landing(
     if not change.path.is_file():
         raise ValueError("change-invalid: change document is missing")
 
+    source_folder = change.path.parent.name
+    source_status = change.status or "in-progress"
     change_text = _landed_change_text(
         change.path.read_text(encoding="utf-8"), landed_at, archive_relative
     )
@@ -1395,12 +1504,25 @@ def project_landing(
 
     _compute_dependents(nodes)
     order, cycle = _topo_sort(nodes)
+    change_dirs = {
+        f"docs/changes/{node.path.parent.name}/"
+        for node in result.nodes.values()
+        if node.kind == "change"
+    }
+    roadmap = _roadmap_landing_text(
+        roadmap_text,
+        needle=f"docs/changes/{source_folder}/",
+        replacement=f"{archive_relative}/",
+        source_status=source_status,
+        change_dirs=change_dirs,
+        node_id=change_id,
+    )
     findings = validate(
         root,
         nodes,
         cycle,
         settings,
-        roadmap_override=_without_generated_roadmap(planned_roadmap_text),
+        roadmap_override=_without_generated_roadmap(roadmap),
     )
     transitioned = Resolution(
         nodes=nodes,
@@ -1414,6 +1536,7 @@ def project_landing(
         dependent_documents=tuple(dependent_documents),
         resolution=_projected_resolution(transitioned),
         roadmap_block=render_block(transitioned),
+        roadmap_text=roadmap,
     )
 
 
@@ -1559,44 +1682,73 @@ def _roadmap_supersede_text(
     or ambiguous entry fails closed — before projected validation and before any mutation —
     with a value-free `roadmap-invalid` detail.
     """
-    if DAG_BEGIN_PREFIX not in text or DAG_END not in text:
-        raise ValueError("roadmap-invalid: generated DAG markers are missing")
     lines = text.splitlines(keepends=True)
-    generated = _generated_dag_range(lines)
-    candidates = [
-        index
-        for index, line in enumerate(lines)
-        if index not in generated and needle in line
-    ]
-    if not candidates:
-        raise ValueError(f"roadmap-invalid: no roadmap line for {node_id}")
-    if len(candidates) > 1:
-        raise ValueError(f"roadmap-invalid: ambiguous roadmap line for {node_id}")
-    start = candidates[0]
-    if any(other.lower() in lines[start].lower() for other in change_dirs - {needle}):
-        raise ValueError(f"roadmap-invalid: ambiguous roadmap line for {node_id}")
-    end = start
-    while (
-        end + 1 < len(lines)
-        and end + 1 not in generated
-        and lines[end + 1].strip()
-        and lines[end + 1][:1].isspace()
-    ):
-        end += 1
-    tokens = _status_source_tokens(source_status)
-    spans: list[tuple[int, int, int]] = []
-    for index in range(start, end + 1):
-        for span_start, span_end in _status_spans(lines[index], tokens):
-            spans.append((index, span_start, span_end))
-    if len(spans) != 1:
-        raise ValueError(f"roadmap-invalid: unrewritable roadmap status for {node_id}")
-    span_index, span_start, span_end = spans[0]
+    start, end = _locate_roadmap_entry(
+        text,
+        needle=needle,
+        other_dirs=change_dirs - {needle},
+        node_id=node_id,
+    )
+    span_index, span_start, span_end = _locate_roadmap_status_span(
+        lines,
+        start,
+        end,
+        _status_source_tokens(source_status),
+        node_id,
+    )
     for index in range(start, end + 1):
         line = lines[index]
         if index == span_index:
             line = line[:span_start] + "(superseded)" + line[span_end:]
-        if needle in line:
-            line = line.replace(needle, replacement)
+        line = _replace_needle(line, needle, replacement)
+        lines[index] = line
+    return "".join(lines)
+
+
+def _roadmap_landing_text(
+    text: str,
+    *,
+    needle: str,
+    replacement: str,
+    source_status: str,
+    change_dirs: set[str],
+    node_id: str,
+) -> str:
+    """Retarget the landed change's roadmap prose entry to its archive path.
+
+    This is the supersede policy with different data — needle `docs/changes/<folder>/`,
+    replacement `docs/changes/archive/<date>-<folder>/`, source status the landed change's own,
+    destination token `(landed)`. The shared locator and status check are uniform with the
+    accept/begin/supersede rewriters; only this caller adds one placement precondition after
+    location: an entry whose only location is after the generated region refuses with a
+    counted value-free `roadmap-invalid` detail, so `land` never rewrites a post-generated
+    citation while the other three rewriters keep canonicalizing one exactly as today.
+    """
+    lines = text.splitlines(keepends=True)
+    generated = _generated_dag_range(lines)
+    start, end = _locate_roadmap_entry(
+        text,
+        needle=needle,
+        other_dirs=change_dirs - {needle},
+        node_id=node_id,
+    )
+    if generated and start > generated[-1]:
+        raise ValueError(
+            f"roadmap-invalid: roadmap entry for {node_id} is after the generated DAG region "
+            "(1 candidate after the generated region)"
+        )
+    span_index, span_start, span_end = _locate_roadmap_status_span(
+        lines,
+        start,
+        end,
+        _status_source_tokens(source_status),
+        node_id,
+    )
+    for index in range(start, end + 1):
+        line = lines[index]
+        if index == span_index:
+            line = line[:span_start] + "(landed)" + line[span_end:]
+        line = _replace_needle(line, needle, replacement)
         lines[index] = line
     return "".join(lines)
 

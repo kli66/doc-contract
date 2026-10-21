@@ -15,6 +15,8 @@ from typing import Callable, Mapping, Sequence
 from .config import Settings
 from .resolver import (
     CHANGE_STATUSES,
+    DAG_BEGIN_PREFIX,
+    DAG_END,
     Finding,
     Resolution,
     parse_front_matter,
@@ -507,37 +509,52 @@ def _candidate_metadata(
     return change_id, status, "gated_on" in values
 
 
-def classify_change(
-    root: Path,
-    settings: Settings,
-    change_ref: str,
-    *,
-    action: LifecycleRequest | str,
-    include_untracked: bool = False,
-) -> LifecycleSelection:
-    """Classify one lifecycle reference before whole-repository preflight."""
-    del settings  # Reserved for repository-layout configuration in a future schema.
-    root = root.resolve()
-    request = _normalized_request(action)
-    candidate = _candidate_for_ref(root, change_ref)
-    if candidate is None or not candidate.path.exists():
-        _raise_diagnostic(
-            _diagnostic("change-ref-unknown", "change reference is unknown")
-        )
-    relative = candidate.path.relative_to(root).as_posix()
-    tracking = tracking_mode(root, candidate.path)
-    if tracking == "untracked" and not include_untracked:
-        change_id = _safe_folder_id(candidate)
+def _node_document_count(folder: Path) -> int:
+    """The number of node-bearing Markdown documents physically inside `folder`, counting
+    every `.md` that opens with a front-matter fence regardless of tracked/untracked state.
+
+    This is the actual folder membership a whole-folder retirement (`supersede`/`land`) would
+    remove, not the resolver's tracked node set — an untracked sibling still disappears on
+    removal, so it must count toward the refusal.
+    """
+    count = 0
+    for document in sorted(folder.glob("*.md")):
+        try:
+            raw, _ = split_front_matter(document.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if raw is not None:
+            count += 1
+    return count
+
+
+def _refuse_multi_node_folder(
+    relative: str, folder: Path, change_id: str, status: str | None
+) -> None:
+    node_count = _node_document_count(folder)
+    if node_count > 1:
         _raise_diagnostic(
             _diagnostic(
-                "change-untracked-excluded",
-                f"change {change_id} is untracked and excluded",
-                _canonical_command(request, change_id, include_untracked=True),
+                "change-multi-node-folder",
+                f"change folder {relative} holds {node_count} change nodes; "
+                "land and supersede refuse a multi-node folder",
             ),
             change_id=change_id,
             path=relative,
+            status=status,
         )
-    change_id, status, gate_present = _candidate_metadata(root, candidate)
+
+
+def _classify_status_precedence(
+    request: LifecycleRequest,
+    change_id: str,
+    status: str,
+    gate_present: bool,
+    relative: str,
+) -> LifecycleDiagnostic | None:
+    """Apply the existing blocked/proposed/landed status precedence to a determinable
+    status, raising the stable diagnostic when blocked or returning the already-landed
+    diagnostic for an eligible landed retirement verb (or None when no diagnostic applies)."""
     if status == "blocked":
         gate = "true" if gate_present else "false"
         _raise_diagnostic(
@@ -601,20 +618,112 @@ def classify_change(
                 path=relative,
                 status=status,
             )
-        return LifecycleSelection(
-            change_id,
-            relative,
-            status,
-            tracking,
-            gate_present,
-            diagnostic,
-        )
+        return diagnostic
+    return None
+
+
+def _classify_selected_status(
+    request: LifecycleRequest,
+    change_id: str,
+    status: str,
+    gate_present: bool,
+    relative: str,
+    tracking: TrackingMode,
+) -> LifecycleSelection:
+    """Build the eligible single-node selection using the real tracking mode."""
+    diagnostic = _classify_status_precedence(
+        request, change_id, status, gate_present, relative
+    )
     return LifecycleSelection(
         change_id,
         relative,
         status,
         tracking,
         gate_present,
+        diagnostic,
+    )
+
+
+def classify_change(
+    root: Path,
+    settings: Settings,
+    change_ref: str,
+    *,
+    action: LifecycleRequest | str,
+    include_untracked: bool = False,
+) -> LifecycleSelection:
+    """Classify one lifecycle reference before whole-repository preflight."""
+    del settings  # Reserved for repository-layout configuration in a future schema.
+    root = root.resolve()
+    request = _normalized_request(action)
+    candidate = _candidate_for_ref(root, change_ref)
+    if candidate is None or not candidate.path.exists():
+        _raise_diagnostic(
+            _diagnostic("change-ref-unknown", "change reference is unknown")
+        )
+    relative = candidate.path.relative_to(root).as_posix()
+
+    retirement = request in {LifecycleRequest.SUPERSEDE, LifecycleRequest.LAND}
+    node_count = (
+        _node_document_count(candidate.path)
+        if retirement and not candidate.archive
+        else 0
+    )
+
+    if node_count > 1:
+        # A retirement verb against a multi-node folder. Status precedence still wins
+        # whenever one status is determinable (blocked/accepted/in-progress/landed/
+        # proposed); the counted refusal fires only once the change is otherwise eligible.
+        # This runs before `tracking_mode` so a tracked node plus an untracked node-bearing
+        # sibling reaches the guard instead of being masked by `partial-tracking`. A partially
+        # tracked folder is mixed, not untracked, so the exclusion probe records only a boolean.
+        is_untracked = False
+        try:
+            is_untracked = tracking_mode(root, candidate.path) == "untracked"
+        except TransactionError as exc:
+            if not str(exc).startswith("partial-tracking:"):
+                raise
+        if is_untracked and not include_untracked:
+            change_id = _safe_folder_id(candidate)
+            _raise_diagnostic(
+                _diagnostic(
+                    "change-untracked-excluded",
+                    f"change {change_id} is untracked and excluded",
+                    _canonical_command(request, change_id, include_untracked=True),
+                ),
+                change_id=change_id,
+                path=relative,
+            )
+        try:
+            change_id, status, gate_present = _candidate_metadata(root, candidate)
+        except LifecycleError as exc:
+            if exc.diagnostic is not None and exc.diagnostic.code == "change-front-matter-invalid":
+                # A path-shaped reference cannot establish one status across the folder's
+                # nodes; emit the counted refusal without fabricating a status.
+                _refuse_multi_node_folder(
+                    relative, candidate.path, _safe_folder_id(candidate), None
+                )
+            raise
+        _classify_status_precedence(
+            request, change_id, status, gate_present, relative
+        )
+        _refuse_multi_node_folder(relative, candidate.path, change_id, status)
+
+    tracking = tracking_mode(root, candidate.path)
+    if tracking == "untracked" and not include_untracked:
+        change_id = _safe_folder_id(candidate)
+        _raise_diagnostic(
+            _diagnostic(
+                "change-untracked-excluded",
+                f"change {change_id} is untracked and excluded",
+                _canonical_command(request, change_id, include_untracked=True),
+            ),
+            change_id=change_id,
+            path=relative,
+        )
+    change_id, status, gate_present = _candidate_metadata(root, candidate)
+    return _classify_selected_status(
+        request, change_id, status, gate_present, relative, tracking
     )
 
 
@@ -700,11 +809,17 @@ def _plan_hash(mutations: Sequence[Mutation], *, after: bool) -> str:
 
 
 def _roadmap_with_block(text: str, block: str) -> str:
-    begin = text.find("<!-- BEGIN GENERATED DAG")
-    end = text.find("<!-- END GENERATED DAG -->")
+    """Splice a freshly rendered generated-DAG block into the roadmap prose in place of the
+    existing generated region, preserving everything before and after it byte-for-byte.
+
+    This is the single DAG-splice helper shared by the landing and lifecycle planners; the
+    marker literals are the resolver's public constants, never a second local spelling.
+    """
+    begin = text.find(DAG_BEGIN_PREFIX)
+    end = text.find(DAG_END)
     if begin < 0 or end < begin:
         raise LifecycleError("roadmap-invalid: generated DAG markers are missing")
-    return text[:begin] + block + text[end + len("<!-- END GENERATED DAG -->") :]
+    return text[:begin] + block + text[end + len(DAG_END) :]
 
 
 def _diff_for(path: str, before: str, after: str) -> str:

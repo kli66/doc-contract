@@ -95,7 +95,9 @@ Forward-looking work parked until a condition makes it relevant — *not* a deci
 - **Substantial work** → a `docs/changes/<name>/` folder, default a **single `change.md`**
   (`## Why` · `## What changes` [Δ ADDED/MODIFIED/REMOVED] · `## Tasks` · `## Verify`).
 - **Rare meta-change** → split into `proposal.md` / `design.md` / `tasks.md`, only when each section
-  is genuinely large. Three files is the *ceiling*, not the default.
+  is genuinely large. Three files is the *ceiling*, not the default. The retirement verbs
+  (`land`/`supersede`) act on one change node per folder and require that node document to be
+  `change.md`, so a split folder cannot be retired by those verbs until its sections are collapsed.
 
 ## Change / handoff protocol (MANDATORY)
 
@@ -201,7 +203,13 @@ reviewed command without `--dry-run`. The flag changes presentation only and doe
 strengthen the transaction boundary.
 A never-accepted `proposed` change retires through `doc-contract supersede <change> --reason <text>`
 instead; `land` stays `in-progress`-only, and `check` reports a `roadmap-line-dangling` error when a
-folder vanishes without a lineage record.
+folder vanishes without a lineage record. Both retirement verbs act on one change node per folder
+whose node document is `change.md`, and both locate that change's roadmap entry with one shared,
+counted `roadmap-invalid` guard. The entry `land` enforces is one pre-DAG line plus its indented
+continuations citing the folder, with exactly one status presentation across the whole block; a
+missing, duplicated, cross-referenced, statusless, unclosed, or post-generated-region-only entry
+refuses before mutation. `check` also reports a `multi-node-change-folder` WARN naming the folder
+and count when a folder holds more than one change node.
 Add `--include-untracked` only for explicitly provisional work; the command previews those nodes
 before mutation and labels baseline warnings separately from new regressions. The transaction owns
 the status, roadmap, fingerprint, journal, and archive boundaries.

@@ -1,7 +1,7 @@
 ---
 id: retirement-guards-and-roadmap-entry-locator
 persistence: ephemeral
-status: proposed
+status: landed
 track: lifecycle
 depends_on:
   - supersede-unaccepted-proposal
@@ -15,15 +15,21 @@ files_owned:
   - tests/test_resolver.py
   - tests/test_lifecycle.py
   - tests/test_landing.py
+  - tests/test_reconciliation.py
   - docs/spec/capabilities.md
   - README.md
   - SKILL.md
   - AGENTS.template.md
+  - guides/new-change.md
   - docs/roadmap.md
+accepted_at: 2026-10-20
+started_at: 2026-10-20
+landed_at: 2026-10-21
+archive_path: docs/changes/archive/2026-10-21-retirement-guards-and-roadmap-entry-locator
 ---
 # Guard retirement: one roadmap-entry locator across land, supersede, accept, and begin
 
-Status: Proposed (not accepted) · Proposed 2026-10-14 · Amended 2026-10-19 (scope: the landing prose rewrite)
+Status: Landed · 2026-10-21
 
 **Upstream dependencies:** `supersede-unaccepted-proposal` is landed and owns the `supersede` verb,
 the folder-removal transaction, the `roadmap-line-dangling` finding, and the
@@ -62,22 +68,22 @@ shared `capabilities.md` sentences are reconciled once against a settled neighbo
 a reconciliation preference, not a functional prerequisite — the guards are correct with or without
 that renderer, which is why no `depends_on` edge is declared and why a revised or replaced F-003
 item cannot dangle this one. That neighbour has since landed, so the sequencing preference is
-already satisfied. `docs/roadmap.md` is shared with `runtime-source-provenance`,
-`review-bound-acceptance-plan`, `proportional-accepted-work-contract`, and `optional-project-memory`;
-`docs/spec/capabilities.md`, `README.md`, and `SKILL.md` with `runtime-source-provenance` and
-`review-bound-acceptance-plan`; `AGENTS.template.md` with `review-bound-acceptance-plan`,
-`proportional-accepted-work-contract`, and `optional-project-memory`; and `guides/new-change.md`, once
-this item claims it for the retirement-verb authoring convention, with
+already satisfied. `review-bound-acceptance-plan` has also landed, so it is a landed baseline rather
+than an active overlap. `docs/roadmap.md` is shared with `runtime-source-provenance`,
+`proportional-accepted-work-contract`, and `optional-project-memory`; `docs/spec/capabilities.md`,
+`README.md`, and `SKILL.md` with `runtime-source-provenance`; `AGENTS.template.md` with
+`proportional-accepted-work-contract` and `optional-project-memory`; and `guides/new-change.md`,
+which this item claims for the retirement-verb authoring convention, with
 `proportional-accepted-work-contract` and `optional-project-memory`, which already own it. All of
 those are additive-prose or lineage-region overlaps with no ordering dependency, so whichever item
 lands second preserves all contracts. `src/doc_contract/resolver.py` and
 `tests/test_resolver.py` were also owned historically by landed `reflect-project-evidence` and
 `supersede-unaccepted-proposal`; both are landed baselines, not active conflicts. No shared symbol
 with any active proposal: the locator, the landing retarget policy, and the multi-node precondition
-are new. The stamp-side residuals recorded in the same incident note are proposed separately as
-`stamp-untracked-and-suspect-link-wording` (still proposed; it shares `resolver.py`,
+are new. The stamp-side residuals recorded in the same incident note landed separately as
+`stamp-untracked-and-suspect-link-wording` (2026-10-20; it shared `resolver.py`,
 `tests/test_resolver.py`, `docs/spec/capabilities.md`, `README.md`, and `docs/roadmap.md` in disjoint
-regions and declares this handoff back, with no ordering edge either way).
+regions and declared this handoff back, with no ordering edge either way).
 
 ## Why
 
@@ -151,7 +157,9 @@ The layer stays thin.
   closed with a distinct value-free detail. The policy is uniform for all three callers — no
   per-verb tolerance switch — so `_roadmap_transition_text` (status-only) and the retarget policy
   (`_roadmap_supersede_text` plus the new landing policy: folder path and status presentation) differ
-  only in what they substitute, never in what they accept or refuse. That makes three declared
+  only in what they substitute, never in what they accept or refuse. Landing adds one placement
+  precondition *outside* the locator (next bullet): the matcher's eligible set is unchanged, but a
+  landing entry must also live before the generated region. That makes three declared
   behaviour changes, each pinned by a new regression test: `accept`/`begin` newly refuse a duplicated
   or cross-referenced entry instead of rewriting the first clean line and leaving the rest stale;
   `supersede` newly accepts an entry whose indented continuation cites the folder (today that
@@ -167,8 +175,12 @@ The layer stays thin.
 - **A fail-closed landing entry precondition.** A landed change whose entry is missing, duplicated,
   ambiguous against another change folder, statusless, unclosed, or placed only after the generated
   region refuses with a value-free `roadmap-invalid` detail during planning, before projected
-  repository validation and before any mutation — the same precondition `accept`, `begin`, and
-  `supersede` already enforce. The documented entry convention follows: one entry per active change —
+  repository validation and before any mutation. The first four conditions come from the shared
+  locator and fail-closed status check that `accept`, `begin`, and `supersede` already enforce; the
+  post-generated-region condition is one landing-only placement check that runs after location and
+  before projected validation, so the locator's grammar stays uniform and `accept`, `begin`, and
+  `supersede` keep canonicalizing a post-generated-region citation exactly as they do today (pinned
+  by a regression test). The documented entry convention follows: one entry per active change —
   a pre-DAG line plus its indented continuations — cites its folder path, with exactly one status
   presentation across the whole block. Declared residual: `check` does not yet warn about a statusless
   active entry (such a line remains legal and produces no `roadmap-status-mismatch`, because absence
@@ -180,9 +192,10 @@ The layer stays thin.
   citation of the same folder, or from a cross-reference, without reading the roadmap. Ids and counts
   only, still value-free. This is the item's one message-contract change; the pinned details in
   `tests/test_resolver.py` and `tests/test_lifecycle.py` move with it.
-- **A `supersede` precondition for multi-node folders.** Classifying a supersede request against a
-  folder that holds more than one node-bearing Markdown document refuses with a new stable,
-  value-free diagnostic naming the folder and the count. No plan, no journal, no mutation.
+- **A precondition for multi-node folders on both retirement verbs.** Classifying a `supersede` or
+  `land` request against a folder that holds more than one node-bearing Markdown document refuses
+  with a new stable, value-free diagnostic naming the folder and the count. No plan, no journal, no
+  mutation.
 - **A `check` warning for the same layout.** The resolver reports the multi-node folder as a WARN
   naming the folder and node count, so an operator sees it before trying to retire it. WARN, not
   ERROR: the resolver's roadmap linkage deliberately supports a multi-node folder (its
@@ -202,9 +215,9 @@ The layer stays thin.
   declared above). `(landed)` and `(superseded)` stay caller literals: extending the roadmap-prose
   recognition grammar to the final statuses is deliberately out of scope, so post-land status remains
   guaranteed by the writer rather than re-checked by `validate`.
-- `src/doc_contract/lifecycle.py`: the new classification diagnostic, raised for the supersede
-  request only and after the existing blocked/proposed/landed precedence, so every other verb's
-  classification is untouched.
+- `src/doc_contract/lifecycle.py`: the new classification diagnostic, raised for the `supersede`
+  and `land` requests only and after the existing blocked/proposed/landed precedence, so every other
+  verb's classification is untouched.
 - `src/doc_contract/landing.py`: `_roadmap_prose_output` is deleted, `_plan_landing` passes the
   current roadmap prose to `project_landing` and consumes `projection.roadmap_text`, and the
   `_roadmap_output` DAG splice collapses into one helper that lives in `lifecycle.py` and is imported
@@ -263,9 +276,12 @@ locator; only their duplicated matching grammar is retired.
    roadmap stays consistent with the generated DAG; a case-varied or annotated presentation
    (`(PROPOSED)`, `(proposed, depends on x)`) is canonicalized to `(landed)` instead of being
    retargeted with a stale status; a second pre-DAG citation of the landed folder (a `Deferred Work`
-   register), a citation placed after the generated region, and a statusless, unclosed, or duplicated
-   entry each refuse with the count and mutate nothing; the entry's rationale, wrapped continuation
-   lines, line terminator, and the generated DAG region survive byte-for-byte.
+   register), an entry whose only location is after the generated region, and a statusless, unclosed,
+   or duplicated entry each refuse with the count and mutate nothing; the entry's rationale, wrapped
+   continuation lines, and line terminator survive byte-for-byte at the prose seam, the rewrite never
+   touches a generated line, and the landing planner then re-renders the generated DAG block from the
+   projected graph, so the landed block equals the freshly rendered one rather than the pre-land
+   bytes.
 8. Document the conventions and the diagnostics in `docs/spec/capabilities.md`, `README.md`,
    `SKILL.md`, `AGENTS.template.md`, and `guides/new-change.md` — the entry-block convention `land`
    now enforces, the landing `roadmap-invalid` refusal beside `accept`/`begin`, the
@@ -285,8 +301,8 @@ locator; only their duplicated matching grammar is retired.
   `doc-contract check --repo-root . --offline` returns 0 errors with no new warning delta beyond the
   declared baseline.
 - In a temporary repository, a folder holding `change.md` plus `fix-b.md` is refused by `supersede`
-  with the new code, the folder and its sibling are untouched, no journal is created, and
-  `check --offline` reports the multi-node WARN naming the folder.
+  and by `land` with the new code, the folder and its sibling are untouched, no journal is created,
+  and `check --offline` reports the multi-node WARN naming the folder.
 - In a temporary repository, a folder whose node document is `proposal.md` is refused with a message
   naming the folder and `proposal.md` rather than the bare `change.md is missing`: by `land` when the
   change is `in-progress`, and by `supersede` when it is `proposed`.
@@ -309,4 +325,5 @@ locator; only their duplicated matching grammar is retired.
   output for every shape their existing tests cover, and differ only in the three declared behaviour
   changes (duplicate/cross-reference refusal, entry-block scope, case-insensitive candidate
   matching); `land` differs only in the collision, ambiguity, statusless-entry,
-  annotated-presentation, post-DAG-citation, and diagnostic-count cases this item declares.
+  annotated-presentation, post-DAG-citation, multi-node-folder, and diagnostic-count cases this item
+  declares.

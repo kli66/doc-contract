@@ -13,12 +13,13 @@ from doc_contract.lifecycle import (
     LifecycleError,
     LifecycleRequest,
     TransitionAction,
+    _node_document_count,
     classify_change,
     execute_transition,
     plan_transition,
 )
 from doc_contract.resolver import fingerprint, parse_front_matter, resolve
-from test_landing import _repo, _settings, _write
+from test_landing import _git, _repo, _settings, _write
 
 
 def _proposed(root: Path) -> None:
@@ -686,22 +687,22 @@ def test_begin_canonicalizes_each_supported_accepted_presentation(
 
 
 @pytest.mark.parametrize(
-    ("status", "action", "presentation"),
+    ("status", "action", "presentation", "presentations"),
     [
-        ("proposed", "accept", "— promote the resolver boundary"),
-        ("proposed", "accept", "(proposed ZYZZYVA-annotation — promote the resolver boundary"),
-        ("proposed", "accept", "(proposed) — was (proposed) before"),
-        ("proposed", "accept", "(proposed) proposed 2026-08-03"),
-        ("accepted", "begin", "— promote the resolver boundary"),
-        ("accepted", "begin", "(accepted ZYZZYVA-annotation — promote the resolver boundary"),
-        ("accepted", "begin", "(accepted) — was (accepted) before"),
+        ("proposed", "accept", "— promote the resolver boundary", 0),
+        ("proposed", "accept", "(proposed ZYZZYVA-annotation — promote the resolver boundary", 0),
+        ("proposed", "accept", "(proposed) — was (proposed) before", 2),
+        ("proposed", "accept", "(proposed) proposed 2026-08-03", 2),
+        ("accepted", "begin", "— promote the resolver boundary", 0),
+        ("accepted", "begin", "(accepted ZYZZYVA-annotation — promote the resolver boundary", 0),
+        ("accepted", "begin", "(accepted) — was (accepted) before", 2),
         # `_STATUS_TOKENS` has no bare token mapping to accepted, so a bare dated accepted
         # marker is unrecognized and must reject; it is not a bare-marker canonicalization case.
-        ("accepted", "begin", "accepted 2026-08-03 — promote the resolver boundary"),
+        ("accepted", "begin", "accepted 2026-08-03 — promote the resolver boundary", 0),
     ],
 )
 def test_an_unrewritable_roadmap_status_fails_closed_before_any_side_effect(
-    tmp_path: Path, status: str, action: str, presentation: str
+    tmp_path: Path, status: str, action: str, presentation: str, presentations: int
 ) -> None:
     root = _annotated_repo(tmp_path, presentation=presentation, status=status)
     # The located line still resolves cleanly, so the rejection must come from the rewrite
@@ -721,7 +722,10 @@ def test_an_unrewritable_roadmap_status_fails_closed_before_any_side_effect(
     diagnostic = captured.value.diagnostic
     assert diagnostic.code == "roadmap-invalid"
     # A fixed, value-free detail: no line text, no presentation, no annotation prose, no offsets.
-    assert diagnostic.message == "roadmap-invalid: unrewritable roadmap status for transactional"
+    assert diagnostic.message == (
+        f"roadmap-invalid: unrewritable roadmap status for transactional "
+        f"({presentations} status presentations)"
+    )
     assert "preflight-invalid" not in diagnostic.message
     assert "ZYZZYVA" not in diagnostic.message
     assert "docs/roadmap.md" not in diagnostic.message
@@ -1251,3 +1255,259 @@ def test_findings_do_not_affect_plan_id(tmp_path: Path) -> None:
 
     # The warning should be in findings but not affect plan_id
     assert any(f.code == "owned-file-missing" for f in plan.current_findings)
+
+
+# --------------------------------------------------------- supersede multi-node precondition
+#
+# `supersede` retires a whole folder, so a folder holding more than one node-bearing document is
+# refused in classification with a stable, value-free code naming the folder and the count.
+
+
+def _multi_node_repo(tmp_path: Path) -> Path:
+    root = _repo(tmp_path)
+    _proposed(root)
+    _write(
+        root,
+        "docs/changes/transactional/fix-b.md",
+        "---\nid: fix-b\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# fix-b\n",
+    )
+    return root
+
+
+def test_supersede_refuses_a_multi_node_folder_by_id_and_path(tmp_path: Path) -> None:
+    root = _multi_node_repo(tmp_path)
+    settings = _settings(root)
+    for ref in ("transactional", "docs/changes/transactional"):
+        with pytest.raises(LifecycleError) as captured:
+            classify_change(
+                root,
+                settings,
+                ref,
+                action=LifecycleRequest.SUPERSEDE,
+                include_untracked=True,
+            )
+        diagnostic = captured.value.diagnostic
+        assert diagnostic.code == "change-multi-node-folder"
+        assert diagnostic.message == (
+            "change folder docs/changes/transactional holds 2 change nodes; "
+            "land and supersede refuse a multi-node folder"
+        )
+        assert diagnostic.next_command is None
+    assert (root / "docs/changes/transactional/change.md").is_file()
+    assert (root / "docs/changes/transactional/fix-b.md").is_file()
+    assert not list((root / ".git").glob("doc-contract/supersede-*.json"))
+
+
+def test_multi_node_refusal_does_not_leak_document_content(tmp_path: Path) -> None:
+    root = _multi_node_repo(tmp_path)
+    (root / "docs/changes/transactional/fix-b.md").write_text(
+        "---\nid: fix-b\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# fix-b\n\nPRIVATE-BODY-SENTINEL\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-multi-node-folder"
+    assert "PRIVATE-BODY-SENTINEL" not in captured.value.diagnostic.message
+
+
+def test_supersede_refuses_multi_node_before_plan_or_journal(tmp_path: Path) -> None:
+    root = _multi_node_repo(tmp_path)
+    before = {
+        "change.md": (root / "docs/changes/transactional/change.md").read_bytes(),
+        "fix-b.md": (root / "docs/changes/transactional/fix-b.md").read_bytes(),
+        "roadmap": (root / "docs/roadmap.md").read_bytes(),
+    }
+    with pytest.raises(LifecycleError) as captured:
+        plan_supersede(
+            root,
+            _settings(root),
+            "transactional",
+            reason="reason",
+            date="2026-07-23",
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-multi-node-folder"
+    assert (root / "docs/changes/transactional/change.md").read_bytes() == before["change.md"]
+    assert (root / "docs/changes/transactional/fix-b.md").read_bytes() == before["fix-b.md"]
+    assert (root / "docs/roadmap.md").read_bytes() == before["roadmap"]
+    assert not list((root / ".git").glob("doc-contract/supersede-*.json"))
+
+
+def test_multi_node_precedence_keeps_blocked_and_other_verbs_unchanged(tmp_path: Path) -> None:
+    blocked = _multi_node_repo(tmp_path / "blocked")
+    change = blocked / "docs/changes/transactional/change.md"
+    change.write_text(
+        change.read_text(encoding="utf-8").replace("status: proposed", "status: blocked"),
+        encoding="utf-8",
+    )
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            blocked,
+            _settings(blocked),
+            "transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-blocked"
+
+    proposed = _multi_node_repo(tmp_path / "proposed")
+    selection = classify_change(
+        proposed,
+        _settings(proposed),
+        "transactional",
+        action=LifecycleRequest.ACCEPT,
+        include_untracked=True,
+    )
+    assert selection.change_id == "transactional"
+    assert selection.status == "proposed"
+    with pytest.raises(LifecycleError) as begin:
+        classify_change(
+            proposed,
+            _settings(proposed),
+            "transactional",
+            action=LifecycleRequest.BEGIN,
+            include_untracked=True,
+        )
+    assert begin.value.diagnostic.code == "change-proposed-unaccepted"
+
+
+def test_node_document_count_is_physical_and_includes_untracked_siblings(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    _git(root, "add", "docs/changes/transactional/change.md")
+    _write(
+        root,
+        "docs/changes/transactional/fix-b.md",
+        "---\nid: fix-b\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# fix-b\n",
+    )
+    assert _node_document_count(root / "docs/changes/transactional") == 2
+
+
+def _multi_node_status(root: Path, status: str) -> Path:
+    change = root / "docs/changes/transactional/change.md"
+    change.write_text(
+        change.read_text(encoding="utf-8").replace("status: proposed", f"status: {status}"),
+        encoding="utf-8",
+    )
+    return change
+
+
+def test_land_refuses_a_multi_node_folder_by_id_and_path(tmp_path: Path) -> None:
+    root = _multi_node_repo(tmp_path)
+    _multi_node_status(root, "in-progress")
+    settings = _settings(root)
+
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            settings,
+            "transactional",
+            action=LifecycleRequest.LAND,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-multi-node-folder"
+    assert captured.value.status == "in-progress"
+
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            settings,
+            "docs/changes/transactional",
+            action=LifecycleRequest.LAND,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-multi-node-folder"
+    assert captured.value.status is None
+    assert not list((root / ".git").glob("doc-contract/land-*.json"))
+
+
+@pytest.mark.parametrize("status", ["blocked", "accepted", "in-progress"])
+def test_path_reference_multi_node_refusal_does_not_fabricate_status(
+    tmp_path: Path, status: str
+) -> None:
+    root = _multi_node_repo(tmp_path)
+    _multi_node_status(root, status)
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "docs/changes/transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == "change-multi-node-folder"
+    assert captured.value.status is None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        ("blocked", "change-blocked"),
+        ("accepted", "change-not-proposed"),
+        ("in-progress", "change-not-proposed"),
+    ],
+)
+def test_id_reference_multi_node_status_precedence_wins(
+    tmp_path: Path, status: str, expected_code: str
+) -> None:
+    root = _multi_node_repo(tmp_path)
+    _multi_node_status(root, status)
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=True,
+        )
+    assert captured.value.diagnostic.code == expected_code
+
+
+def test_mixed_tracking_multi_node_reaches_the_counted_guard(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    _proposed(root)
+    _git(root, "add", "docs/changes/transactional/change.md")
+    _write(
+        root,
+        "docs/changes/transactional/fix-b.md",
+        "---\nid: fix-b\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# fix-b\n",
+    )
+    for include_untracked in (False, True):
+        for ref in ("transactional", "docs/changes/transactional"):
+            with pytest.raises(LifecycleError) as captured:
+                classify_change(
+                    root,
+                    _settings(root),
+                    ref,
+                    action=LifecycleRequest.SUPERSEDE,
+                    include_untracked=include_untracked,
+                )
+            assert captured.value.diagnostic.code == "change-multi-node-folder"
+
+
+def test_fully_untracked_multi_node_stays_behind_untracked_exclusion(
+    tmp_path: Path,
+) -> None:
+    root = _multi_node_repo(tmp_path)
+    with pytest.raises(LifecycleError) as captured:
+        classify_change(
+            root,
+            _settings(root),
+            "transactional",
+            action=LifecycleRequest.SUPERSEDE,
+            include_untracked=False,
+        )
+    assert captured.value.diagnostic.code == "change-untracked-excluded"

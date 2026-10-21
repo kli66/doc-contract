@@ -26,6 +26,7 @@ from doc_contract.resolver import (
     Finding,
     fingerprint,
     parse_front_matter,
+    render_block,
     resolve,
     stamp_node,
 )
@@ -989,3 +990,275 @@ def test_supersede_remove_absent_but_index_tracked_fails_closed(tmp_path: Path) 
     assert "docs/changes/transactional/change.md" in _tracked_files(root)
     journals = list((root / ".git").glob("doc-contract/supersede-*.json"))
     assert journals and json.loads(journals[0].read_text(encoding="utf-8"))["completed"] == []
+
+
+# ------------------------------------------------------- landing rewrite owns the projection
+#
+# `project_landing` derives the rewritten roadmap prose from the current text, so the landing
+# entry locator and placement precondition run on the original prose before projected
+# validation. These regressions pin the collision, ambiguity, statusless-entry,
+# post-generated-region, and byte-preservation cases this item declares.
+
+_DAG_MARKERS = (
+    "<!-- BEGIN GENERATED DAG (regenerate: doc-contract update --repo-root .) -->\n"
+    "```mermaid\nflowchart TD\n```\n"
+    "<!-- END GENERATED DAG -->\n"
+)
+
+
+def _landing_roadmap(*entries: str, dag: str = _DAG_MARKERS) -> str:
+    return "---\npersistence: living\n---\n# Roadmap\n\n" + "\n".join(entries) + "\n\n" + dag
+
+
+def _change_doc(node_id: str, status: str, *, edges: str = "") -> str:
+    return (
+        "---\n"
+        f"id: {node_id}\n"
+        "persistence: ephemeral\n"
+        f"status: {status}\n"
+        "track: test\n"
+        f"{edges}"
+        "---\n"
+        f"# {node_id}\n"
+    )
+
+
+def _landing_repo(
+    tmp_path: Path,
+    *,
+    roadmap: str,
+    changes: dict[str, str],
+) -> Path:
+    root = tmp_path / "repo"
+    _write(
+        root,
+        ".doc-contract.toml",
+        "schema_version = 1\nrepo_name = 'fixture'\nroadmap = 'docs/roadmap.md'\n"
+        "optional_roots = []\n\n[root_nodes]\nroadmap = 'docs/roadmap.md'\n\n"
+        "[capability]\nmode = 'skip'\n",
+    )
+    _write(root, "docs/roadmap.md", roadmap)
+    for relative, content in changes.items():
+        _write(root, relative, content)
+    _git(root, "init", "-q")
+    _git(root, "add", ".doc-contract.toml", "docs/roadmap.md")
+    return root
+
+
+def test_landing_preserves_prefix_siblings_with_and_without_dependency(tmp_path: Path) -> None:
+    sibling_lines = {
+        "alpha-beta": "- `docs/changes/alpha-beta/` (proposed) — depends on alpha",
+        "alpha2": "- `docs/changes/alpha2/` (proposed) — unrelated prefix sibling",
+        "alpha.beta": "- `docs/changes/alpha.beta/` (proposed) — another prefix sibling",
+    }
+    root = _landing_repo(
+        tmp_path,
+        roadmap=_landing_roadmap(
+            "- `docs/changes/alpha/` (in-progress) — the landing target",
+            sibling_lines["alpha-beta"],
+            sibling_lines["alpha2"],
+            sibling_lines["alpha.beta"],
+        ),
+        changes={
+            "docs/changes/alpha/change.md": _change_doc("alpha", "in-progress"),
+            "docs/changes/alpha-beta/change.md": _change_doc(
+                "alpha-beta", "proposed", edges="depends_on:\n  - alpha\n"
+            ),
+            "docs/changes/alpha2/change.md": _change_doc("alpha2", "proposed"),
+            "docs/changes/alpha.beta/change.md": _change_doc("alpha.beta", "proposed"),
+        },
+    )
+    roadmap = root / "docs/roadmap.md"
+    assert main(["check", "--repo-root", str(root), "--offline", "--include-untracked"]) == 0
+
+    execute_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+
+    text = roadmap.read_text(encoding="utf-8")
+    for sibling, line in sibling_lines.items():
+        assert f"{line}\n" in text, f"{sibling} entry was retargeted"
+    assert "- `docs/changes/archive/2026-07-23-alpha/` (landed)" in text
+    assert "`docs/changes/alpha/`" not in text
+    assert main(["check", "--repo-root", str(root), "--offline", "--include-untracked"]) == 0
+
+
+def test_landing_leaves_a_multi_node_dependent_untouched(tmp_path: Path) -> None:
+    fix_doc = (
+        "---\nid: fix-link\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# fix-link\n"
+    )
+    root = _landing_repo(
+        tmp_path,
+        roadmap=_landing_roadmap(
+            "- `docs/changes/alpha/` (in-progress) — the landing target",
+            "- `docs/changes/alpha-beta/` (proposed) — depends on alpha",
+        ),
+        changes={
+            "docs/changes/alpha/change.md": _change_doc("alpha", "in-progress"),
+            "docs/changes/alpha-beta/change.md": _change_doc(
+                "alpha-beta", "proposed", edges="depends_on:\n  - alpha\n"
+            ),
+            "docs/changes/alpha-beta/fix-link.md": fix_doc,
+        },
+    )
+    fix_path = root / "docs/changes/alpha-beta/fix-link.md"
+    before = fix_path.read_bytes()
+    assert main(["check", "--repo-root", str(root), "--offline", "--include-untracked"]) == 0
+
+    execute_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+
+    assert fix_path.read_bytes() == before
+    text = (root / "docs/roadmap.md").read_text(encoding="utf-8")
+    assert "- `docs/changes/alpha-beta/` (proposed) — depends on alpha\n" in text
+    final = resolve(root, _settings(root), include_untracked=True)
+    assert not [f for f in final.errors]
+    assert (root / "docs/roadmap.md").read_text(encoding="utf-8").index("<!-- END GENERATED DAG -->")
+
+
+def test_landing_canonicalizes_case_varied_and_annotated_presentations(tmp_path: Path) -> None:
+    for index, presentation in enumerate(("(IN-PROGRESS)", "(in-progress, depends on x)")):
+        root = _landing_repo(
+            tmp_path / f"case{index}",
+            roadmap=_landing_roadmap(
+                f"- `docs/changes/alpha/` {presentation} — the landing target"
+            ),
+            changes={"docs/changes/alpha/change.md": _change_doc("alpha", "in-progress")},
+        )
+        assert main(["check", "--repo-root", str(root), "--offline", "--include-untracked"]) == 0
+        execute_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+        text = (root / "docs/roadmap.md").read_text(encoding="utf-8")
+        assert "- `docs/changes/archive/2026-07-23-alpha/` (landed) — the landing target\n" in text
+
+
+def test_landing_refuses_a_second_pre_dag_citation(tmp_path: Path) -> None:
+    root = _landing_repo(
+        tmp_path,
+        roadmap=_landing_roadmap(
+            "- `docs/changes/alpha/` (in-progress) — the landing target",
+            "- see `docs/changes/alpha/` for the earlier register entry (proposed)",
+        ),
+        changes={"docs/changes/alpha/change.md": _change_doc("alpha", "in-progress")},
+    )
+    roadmap = root / "docs/roadmap.md"
+    before = roadmap.read_bytes()
+    with pytest.raises(LandingError) as captured:
+        plan_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+    assert captured.value.code == "roadmap-invalid"
+    assert "(2 candidates)" in str(captured.value)
+    assert roadmap.read_bytes() == before
+    assert (root / "docs/changes/alpha/change.md").is_file()
+
+
+def test_landing_refuses_a_post_generated_region_only_entry(tmp_path: Path) -> None:
+    root = _landing_repo(
+        tmp_path,
+        roadmap=_landing_roadmap(
+            "", dag=_DAG_MARKERS
+        ) + "- `docs/changes/alpha/` (in-progress) — only after the generated block\n",
+        changes={"docs/changes/alpha/change.md": _change_doc("alpha", "in-progress")},
+    )
+    roadmap = root / "docs/roadmap.md"
+    before = roadmap.read_bytes()
+    assert main(["check", "--repo-root", str(root), "--offline", "--include-untracked"]) == 0
+    with pytest.raises(LandingError) as captured:
+        plan_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+    assert captured.value.code == "roadmap-invalid"
+    assert "after the generated DAG region" in str(captured.value)
+    assert roadmap.read_bytes() == before
+    assert (root / "docs/changes/alpha/change.md").is_file()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "- `docs/changes/alpha/` — no status",
+        "- `docs/changes/alpha/` (in-progress — unclosed",
+        "- `docs/changes/alpha/` (in-progress) — was (in-progress) before",
+    ],
+)
+def test_landing_refuses_statusless_unclosed_and_duplicated_entries(
+    tmp_path: Path, entry: str
+) -> None:
+    root = _landing_repo(
+        tmp_path,
+        roadmap=_landing_roadmap(entry),
+        changes={"docs/changes/alpha/change.md": _change_doc("alpha", "in-progress")},
+    )
+    roadmap = root / "docs/roadmap.md"
+    before = roadmap.read_bytes()
+    with pytest.raises(LandingError) as captured:
+        plan_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+    assert captured.value.code == "roadmap-invalid"
+    assert "status presentations" in str(captured.value)
+    assert roadmap.read_bytes() == before
+    assert (root / "docs/changes/alpha/change.md").is_file()
+
+
+def test_landing_preserves_rationale_continuation_and_regenerates_the_dag(
+    tmp_path: Path,
+) -> None:
+    root = _landing_repo(
+        tmp_path,
+        roadmap=_landing_roadmap(
+            "- `docs/changes/alpha/` (in-progress) — retire after the review\n"
+            "  and capture the seam in project memory"
+        ),
+        changes={"docs/changes/alpha/change.md": _change_doc("alpha", "in-progress")},
+    )
+    roadmap = root / "docs/roadmap.md"
+    before_prose = roadmap.read_text(encoding="utf-8")
+    execute_landing(root, _settings(root), "alpha", date="2026-07-23", include_untracked=True)
+    text = roadmap.read_text(encoding="utf-8")
+    assert (
+        "- `docs/changes/archive/2026-07-23-alpha/` (landed) — retire after the review\n"
+        "  and capture the seam in project memory\n"
+    ) in text
+    # The generated block is re-rendered from the projected graph, not carried over verbatim.
+    final = resolve(root, _settings(root), include_untracked=True)
+    begin = text.index("<!-- BEGIN GENERATED DAG")
+    end = text.index("<!-- END GENERATED DAG -->") + len("<!-- END GENERATED DAG -->")
+    assert text[begin:end] == render_block(final)
+    assert "and capture the seam in project memory" in text
+    assert before_prose.count("  and capture the seam in project memory") == text.count(
+        "  and capture the seam in project memory"
+    )
+
+
+def test_change_md_missing_refusal_names_folder_and_node_document(tmp_path: Path) -> None:
+    land_root = _repo(tmp_path / "land")
+    _write(
+        land_root,
+        "docs/changes/transactional/proposal.md",
+        "---\nid: transactional\npersistence: ephemeral\nstatus: in-progress\ntrack: test\n"
+        "---\n# Transactional\n",
+    )
+    (land_root / "docs/changes/transactional/change.md").unlink()
+    with pytest.raises(LandingError) as captured:
+        plan_landing(
+            land_root, _settings(land_root), "transactional", date="2026-07-23", include_untracked=True
+        )
+    assert captured.value.code == "change-invalid"
+    assert "change.md is missing" in str(captured.value)
+    assert "docs/changes/transactional" in str(captured.value)
+    assert "proposal.md" in str(captured.value)
+
+    sup_root = _supersede_repo(tmp_path / "sup", tracked=False)
+    _write(
+        sup_root,
+        "docs/changes/transactional/proposal.md",
+        "---\nid: transactional\npersistence: ephemeral\nstatus: proposed\ntrack: test\n"
+        "---\n# Transactional\n",
+    )
+    (sup_root / "docs/changes/transactional/change.md").unlink()
+    with pytest.raises(LandingError) as captured:
+        plan_supersede(
+            sup_root,
+            _settings(sup_root),
+            "transactional",
+            reason=_REASON,
+            date="2026-07-23",
+            include_untracked=True,
+        )
+    assert captured.value.code == "change-invalid"
+    assert "change.md is missing" in str(captured.value)
+    assert "docs/changes/transactional" in str(captured.value)
+    assert "proposal.md" in str(captured.value)
